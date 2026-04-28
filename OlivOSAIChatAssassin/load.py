@@ -27,8 +27,7 @@ def load_config():
 
 
 def load_staticKnowledge():
-    global gStaticKnowledge
-    gStaticKnowledge = {}
+    OlivOSAIChatAssassin.data.gStaticKnowledge = {}
     try:
         os.makedirs(OlivOSAIChatAssassin.data.gStaticKnowledgeDir, exist_ok=True)
         for i in os.listdir(OlivOSAIChatAssassin.data.gStaticKnowledgeDir):
@@ -39,29 +38,28 @@ def load_staticKnowledge():
                     if type(f_obj) is not dict:
                         OlivOSAIChatAssassin.logger.warn(f'加载知识库[{i}]失败: 类型错误[{type(f_obj)}]')
                     else:
-                        gStaticKnowledge.update(**f_obj)
+                        OlivOSAIChatAssassin.data.gStaticKnowledge.update(**f_obj)
                         OlivOSAIChatAssassin.logger.log(f'已加载知识库[{i}]')
             except Exception as e:
                 OlivOSAIChatAssassin.logger.warn(f'加载知识库[{i}]失败: {e}')
-        OlivOSAIChatAssassin.logger.log(f'已加载知识库共[{len(gStaticKnowledge)}]条')
+        OlivOSAIChatAssassin.logger.log(f'已加载知识库共[{len(OlivOSAIChatAssassin.data.gStaticKnowledge)}]条')
     except Exception as e:
         OlivOSAIChatAssassin.logger.warn(f'加载知识库完全失败: {e}')
 
 
 def load_memory():
-    global gMemory
     try:
         os.makedirs(OlivOSAIChatAssassin.data.gMemoryDir, exist_ok=True)
         if os.path.exists(OlivOSAIChatAssassin.data.gMemoryPath):
             with OlivOSAIChatAssassin.data.gMemoryLock:
                 with open(OlivOSAIChatAssassin.data.gMemoryPath, 'r', encoding='utf-8') as f:
-                    gMemory = json.load(f)
+                    OlivOSAIChatAssassin.data.gMemory = json.load(f)
         else:
-            gMemory = {}
+            OlivOSAIChatAssassin.data.gMemory = {}
             write_memory()
     except Exception as e:
         OlivOSAIChatAssassin.logger.warn(f'加载记忆失败: {e}')
-        gMemory = None
+        OlivOSAIChatAssassin.data.gMemory = None
 
 
 def write_memory():
@@ -69,6 +67,6 @@ def write_memory():
         try:
             os.makedirs(OlivOSAIChatAssassin.data.gMemoryDir, exist_ok=True)
             with open(OlivOSAIChatAssassin.data.gMemoryPath, 'w', encoding='utf-8') as f:
-                json.dump(gMemory, f, ensure_ascii=False, indent=4)
+                json.dump(OlivOSAIChatAssassin.data.gMemory, f, ensure_ascii=False, indent=4)
         except Exception as e:
             OlivOSAIChatAssassin.logger.warn(f'写入记忆失败: {e}')
