@@ -12,7 +12,7 @@ class FairLock:
         self._next_ticket = 0
         self._serving = 0
         self._held = False  # 是否被持有
-        self._busy_gate = 3
+        self._busy_gate = 2
         self._busy = False
         self._count = 0
 
@@ -65,7 +65,7 @@ class FairLock:
         with self._lock:
             self._busy_gate = gate
 
-    def isBusy(self, gate: int = 3):
+    def isBusy(self):
         with self._lock:
             return self._busy
 
