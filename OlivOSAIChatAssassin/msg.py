@@ -108,6 +108,7 @@ def should_reply(group_id, message, plugin_event):
 
 
 def reply_to_group(plugin_event, group_id):
+    total_start = time.perf_counter()
     if not OlivOSAIChatAssassin.data.gConfig or not OlivOSAIChatAssassin.data.gConfig.get('api_key'):
         return
     # 构建对话历史
@@ -368,7 +369,10 @@ def reply_to_group(plugin_event, group_id):
                 )
                 t_set_knowledge.start()
             OlivOSAIChatAssassin.tools.sleep(1 + (random.random() * 2 - 1) * 0.95)
-            reply(plugin_event, reply_list)
+            reply(
+                plugin_event, reply_list,
+                total_time_past=time.perf_counter() - total_start
+            )
             t_set_memory.join()
             if flag_needKnowledge:
                 t_set_knowledge.join()
@@ -506,11 +510,12 @@ def send_message_force(botHash, send_type, target_id, message):
         plugin_event.send(send_type, target_id, message)
 
 
-def reply(plugin_event, msg: list):
+def reply(plugin_event, msg: list, total_time_past: float = 0.0):
     for i in msg:
         if OlivOSAIChatAssassin.data.gSkipStr in i:
             OlivOSAIChatAssassin.logger.log('SKIP - REPLY STR')
             return
+    flag_first = True
     for i in msg:
         len_i = len(i)
         if len_i <= 0:
@@ -520,6 +525,10 @@ def reply(plugin_event, msg: list):
                 0.2 + (random.random() * 2 - 1) * 0.15
                 for _ in range(len_i)
             ])
+            if flag_first:
+                flag_first = False
+                if sleep_time > total_time_past:
+                    sleep_time -= total_time_past
             if sleep_time > 30:
                 sleep_time /= 2
             OlivOSAIChatAssassin.tools.sleep(sleep_time)
