@@ -139,52 +139,33 @@ def reply_to_group(plugin_event, group_id):
 '''
 
     # 生成记忆
-    def set_memory():
-        history = list(OlivOSAIChatAssassin.data.gMessageHistory.get(group_id, deque()))
-        # 设置任务
-        content = f'''
-# 当前记忆
-- {OlivOSAIChatAssassin.data.gMemory.get(group_id, OlivOSAIChatAssassin.data.gMemoryDefaultStr)}
-
-# 当前任务
-- 对聊天记录进行总结
-- 杜绝流水账，请每次都决定自己需要长期记住什么东西
-- 仅输出需要记忆的信息
-- 不要遗忘别的群的记忆
-- 最终长度限制在128字以内
-'''
-        # 格式化历史为OpenAI消息格式
-        messages = get_ai_context(OlivOSAIChatAssassin.data.gConfig, history, content, flagMerge=True)
-        # 调用 API
-        try:
-            group_memory = OlivOSAIChatAssassin.webTools.call_ai(
-                OlivOSAIChatAssassin.data.gConfig, messages,
-                temperature_override=0.7,
-                json_mode=False,
-                flag_thinking_override=False,
-                reasoning_effort_override="max"
-            )
-            with OlivOSAIChatAssassin.data.gMemoryLock:
-                OlivOSAIChatAssassin.data.gMemory[group_id] = group_memory
-            OlivOSAIChatAssassin.load.write_memory()
-            OlivOSAIChatAssassin.logger.log(f'[本群记忆]\n{OlivOSAIChatAssassin.data.gMemory[group_id]}')
-        except Exception as e:
-            OlivOSAIChatAssassin.logger.warn(f'API FATAL: {e}')
-
-    # 生成长期记忆
-    def set_knowledge(t_thisMemory: dict):
+    def set_memory(t_thisMemory: dict):
         history = list(OlivOSAIChatAssassin.data.gMessageHistory.get(group_id, deque()))
         # 设置任务
         examples_knowledge = {
-            "中国": "五千年文明古国，幅员辽阔，正全面推进民族复兴，坚持和平发展。"
+            "k": {
+                "中国": "五千年文明古国，幅员辽阔，正全面推进民族复兴，坚持和平发展。"
+            },
+            "g": "我们刚刚聊到了中国"
         }
-        content = f'''
+        content = '''
 # 当前任务
+'''
+        if record_knowledge:
+            content += '''
+## 分析知识点，将结果输出至k键的值中
 - 分析当前聊天记录，提炼需要记住的知识点，注意不是对于现状的记录，只记录常识性的知识
 - 每条知识点长度限制在32字以内
 - 每条知识带有一个介于2至8字之间的关键词，被用于作为子字符串进行搜索
 - 知识点以Json对象的格式输出，知识点的关键词为键，内容为值
-
+'''
+        content += '''
+## 总结本群聊天记录，将结果作为字符串输出至g的值中
+- 对聊天记录进行总结
+- 杜绝流水账，请每次都决定自己需要记住什么东西
+- 最终长度限制在128字以内
+'''
+        content += f'''
 # 参考输出
 {json.dumps(examples_knowledge, ensure_ascii=False)}
 '''
@@ -198,7 +179,7 @@ def reply_to_group(plugin_event, group_id):
         )
         # 调用 API
         try:
-            knowledge_data_str = OlivOSAIChatAssassin.webTools.call_ai(
+            call_ai_res = OlivOSAIChatAssassin.webTools.call_ai(
                 OlivOSAIChatAssassin.data.gConfig, messages,
                 temperature_override=0.7,
                 json_mode=False,
@@ -206,46 +187,34 @@ def reply_to_group(plugin_event, group_id):
                 reasoning_effort_override="max",
                 response_format_override={"type": "json_object"}
             )
-            knowledge_data_str = knowledge_data_str.lstrip("```json")
-            knowledge_data_str = knowledge_data_str.lstrip("```")
-            knowledge_data_str = knowledge_data_str.rstrip("```")
-            knowledge_data_str = knowledge_data_str.replace("\r", "")
-            knowledge_data = {}
-            flag_knowledge_err = False
-            flag_knowledge_update = False
-            try:
-                knowledge_data = json.loads(knowledge_data_str)
-            except Exception as e:
-                OlivOSAIChatAssassin.logger.warn(f'API JSON DATA FATAL: {e}\n{knowledge_data_str}')
-                knowledge_data = {}
-                flag_knowledge_err = True
-            if type(knowledge_data) is not dict:
-                OlivOSAIChatAssassin.logger.warn(f'API DATA TYPE FATAL: \n{knowledge_data_str}')
-                knowledge_data = {}
-                flag_knowledge_err = True
-            if flag_knowledge_err:
-                for knowledge_data_str_i in knowledge_data_str.split('\n'):
-                    try:
-                        knowledge_data_i = json.loads(knowledge_data_str_i)
-                        if type(knowledge_data_i) is dict:
-                            knowledge_data.update(**knowledge_data_i)
-                    except Exception:
-                        pass
+            call_ai_data = json.loads(call_ai_res)
+            knowledge_data: 'dict|None' = None
+            group_memory_data: 'str|None' = None
             with OlivOSAIChatAssassin.data.gMemoryLock:
+                if (
+                    'k' in call_ai_data
+                    and type(call_ai_data['k']) is dict
+                ):
+                    knowledge_data = call_ai_data['k']
                 if '全局' not in OlivOSAIChatAssassin.data.gMemory:
                     OlivOSAIChatAssassin.data.gMemory['全局'] = {}
                 if '知识缓存' not in OlivOSAIChatAssassin.data.gMemory['全局']:
                     OlivOSAIChatAssassin.data.gMemory['全局']['知识缓存'] = {}
                 for k, v in knowledge_data.items():
-                    flag_knowledge_update = True
                     if (
                         type(k) is str
                         and type(v) is str
                     ):
                         OlivOSAIChatAssassin.data.gMemory['全局']['知识缓存'][k] = v
                         OlivOSAIChatAssassin.logger.log(f'[更新知识] - {k}\n{v}')
-            if flag_knowledge_update:
-                OlivOSAIChatAssassin.load.write_memory()
+                if (
+                    'g' in call_ai_data
+                    and type(call_ai_data['g']) is str
+                ):
+                    group_memory_data = call_ai_data['g']
+                OlivOSAIChatAssassin.data.gMemory[group_id] = group_memory_data
+                OlivOSAIChatAssassin.logger.log(f'[本群记忆]\n{OlivOSAIChatAssassin.data.gMemory[group_id]}')
+            OlivOSAIChatAssassin.load.write_memory()
         except Exception as e:
             OlivOSAIChatAssassin.logger.warn(f'API FATAL: {e}')
 
@@ -345,7 +314,6 @@ def reply_to_group(plugin_event, group_id):
         OlivOSAIChatAssassin.logger.warn(f'API FATAL: {e}')
     # 发送回复
     if reply_text is None:
-        get_gGroupKnowledgeCounter(str(group_id), False)
         OlivOSAIChatAssassin.logger.log('NONE')
     else:
         # 限制消息长度
@@ -353,31 +321,22 @@ def reply_to_group(plugin_event, group_id):
         if len(reply_text) > max_len:
             reply_text = reply_text[:max_len] + '...'
         if reply_text == OlivOSAIChatAssassin.data.gSkipStr:
-            get_gGroupKnowledgeCounter(str(group_id), False)
             OlivOSAIChatAssassin.logger.log('SKIP')
         else:
-            flag_needKnowledge = get_gGroupKnowledgeCounter(str(group_id), True)
-            if record_knowledge is not True:
-                flag_needKnowledge = False
             reply_list = reply_split(reply_wash(reply_text))
             OlivOSAIChatAssassin.logger.log(f'REPLY - {reply_list}')
             add_message_to_history(group_id, ''.join(reply_list), None, None)
-            t_set_memory = threading.Thread(target=set_memory)
+            t_set_memory = threading.Thread(
+                target=set_memory,
+                args=(thisMemory, )
+            )
             t_set_memory.start()
-            if flag_needKnowledge:
-                t_set_knowledge = threading.Thread(
-                    target=set_knowledge,
-                    args=(thisMemory, )
-                )
-                t_set_knowledge.start()
             OlivOSAIChatAssassin.tools.sleep(1 + (random.random() * 2 - 1) * 0.95)
             reply(
                 plugin_event, reply_list,
                 total_time_past=time.perf_counter() - total_start
             )
             t_set_memory.join()
-            if flag_needKnowledge:
-                t_set_knowledge.join()
 
 
 def get_ai_context(
@@ -564,34 +523,4 @@ def msg_wash(msg: str):
     res = re.sub(r'\[OP:image.+\]', '[图片]', res)
     res = re.sub(r'\[OP:record.+\]', '[语音]', res)
     res = re.sub(r'\[OP:video.+\]', '[视频]', res)
-    return res
-
-
-def get_gGroupKnowledgeCounter(group_id: str, flag_busy: bool, rate: int = 4):
-    res = False
-    if group_id not in OlivOSAIChatAssassin.data.gGroupKnowledgeCounter:
-        OlivOSAIChatAssassin.data.gGroupKnowledgeCounter[group_id] = (
-            OlivOSAIChatAssassin.data.gGroupKnowledgeCounterLimit
-        )
-    if flag_busy:
-        OlivOSAIChatAssassin.data.gGroupKnowledgeCounter[group_id] += int(rate)
-    else:
-        OlivOSAIChatAssassin.data.gGroupKnowledgeCounter[group_id] += 1
-    if (
-        flag_busy
-        and (
-            OlivOSAIChatAssassin.data.gGroupKnowledgeCounter[group_id]
-            >= OlivOSAIChatAssassin.data.gGroupKnowledgeCounterLimit
-        )
-    ):
-        OlivOSAIChatAssassin.data.gGroupKnowledgeCounter[group_id] = 0
-        res = True
-    if not res:
-        OlivOSAIChatAssassin.logger.log(
-            f'KNOWLEDGE [{group_id}]'
-            f' - {OlivOSAIChatAssassin.data.gGroupKnowledgeCounter[group_id]}'
-            f' / {OlivOSAIChatAssassin.data.gGroupKnowledgeCounterLimit}'
-        )
-    else:
-        OlivOSAIChatAssassin.logger.log(f'KNOWLEDGE [{group_id}] - HIT')
     return res
