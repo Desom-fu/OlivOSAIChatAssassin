@@ -203,7 +203,8 @@ def reply_to_group(plugin_event, group_id):
                 temperature_override=0.7,
                 json_mode=False,
                 flag_thinking_override=False,
-                reasoning_effort_override="max"
+                reasoning_effort_override="max",
+                response_format_override={"type": "json_object"}
             )
             knowledge_data_str = knowledge_data_str.lstrip("```json")
             knowledge_data_str = knowledge_data_str.lstrip("```")

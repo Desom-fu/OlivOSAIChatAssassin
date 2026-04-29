@@ -10,7 +10,8 @@ def call_ai(
     temperature_override: 'float|None' = None,
     json_mode: bool = True,
     flag_thinking_override: 'bool|None' = None,
-    reasoning_effort_override: 'str|None' = None
+    reasoning_effort_override: 'str|None' = None,
+    response_format_override: 'dict|None' = None
 ):
     # 调用 API
     res = None
@@ -46,6 +47,10 @@ def call_ai(
     if thinking.get('type', 'disabled') == 'enabled':
         payload.update({
             'reasoning_effort': reasoning_effort
+        })
+    if response_format_override is not None:
+        payload.update({
+            'response_format': response_format_override
         })
     OlivOSAIChatAssassin.logger.log("CALL AI - START")
     start = time.perf_counter()
