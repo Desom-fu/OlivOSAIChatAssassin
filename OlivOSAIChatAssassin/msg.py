@@ -316,13 +316,16 @@ def reply_to_group(plugin_event, group_id):
     # 调用 API
     reply_list = None
     reply_count = 0
+    retry_count = OlivOSAIChatAssassin.data.gConfig.get(
+        "retry_count", OlivOSAIChatAssassin.data.configDefault["retry_count"]
+    )
     try:
         while (
             reply_list is None
-            and reply_count < 5
+            and reply_count < retry_count
         ):
             reply_count += 1
-            OlivOSAIChatAssassin.logger.log(f"CALL AI - TRY [{reply_count}]")
+            OlivOSAIChatAssassin.logger.log(f"CALL AI - TRY [{reply_count}/{retry_count}]")
             reply_list = get_json_message(
                 OlivOSAIChatAssassin.webTools.call_ai(
                     OlivOSAIChatAssassin.data.gConfig, messages,
