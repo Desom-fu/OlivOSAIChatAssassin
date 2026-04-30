@@ -44,10 +44,15 @@ configDefault = {
     'enabled_groups': [
         'all'
     ],
-    'history_size': 12,
+    'history_size': 8,
     'reply_probability': 1,
     'reply_keywords': [],
     'mention_reply': True,
     'ignore_prefixes': [],
-    'max_message_length': 2000
+    'max_message_length': 2000,
+    "ocr_api": {
+        "api_key": "",
+        "api_base": "https://api.siliconflow.cn/v1/",
+        "model": "deepseek-ai/DeepSeek-OCR"
+    }
 }
