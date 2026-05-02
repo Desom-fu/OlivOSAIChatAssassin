@@ -139,6 +139,7 @@ def reply_to_group(plugin_event, group_id):
 # 规则
 - 你是一个人类，这是你日常水群的群聊，你会根据你的人格设定自行决定要不要参与群聊对话
 - "[OP:at,id=【QQ号】]"表示你被@，这是群聊中@的格式，你也可以使用这种格式
+- 越新的消息越重要，不要重复去回复已经回复过的消息，除非有必要
 - 谨记你是在进行聊天，所以不要把括号之类的内容发出来，不需要你描述自己的动作或者心理活动，这只会让人起疑
 
 # 人格设定
@@ -161,6 +162,9 @@ def reply_to_group(plugin_event, group_id):
             "g": "我们刚刚聊到了中国"
         }
         content = '''
+# 信息
+前情提要附加在最末尾
+
 # 当前任务
 '''
         if record_knowledge:
@@ -184,10 +188,8 @@ def reply_to_group(plugin_event, group_id):
         # 格式化历史为OpenAI消息格式
         messages = get_ai_context(
             OlivOSAIChatAssassin.data.gConfig, history, content, flagMerge=True,
-            prefix=(
-                f'前情提要：{OlivOSAIChatAssassin.data.gMemory.get(group_id, OlivOSAIChatAssassin.data.gMemoryDefaultStr)}'
-                f'\n\n现在提炼如下对话中的重要知识点：'
-            )
+            prefix='现在提炼如下对话中的重要知识点：',
+            patch=f'前情提要：{OlivOSAIChatAssassin.data.gMemory.get(group_id, OlivOSAIChatAssassin.data.gMemoryDefaultStr)}'
         )
         # 调用 API
         try:
@@ -417,7 +419,7 @@ def get_ai_context(
         messages.append(
             {
                 "role": "user",
-                "content": f"{prefix}\n" + chat_content
+                "content": f"{prefix}\n{chat_content}\n\n{patch}"
             }
         )
     else:

@@ -47,7 +47,7 @@ configDefault = {
     'history_size_min': 5,
     'history_size': 8,
     'history_dynamic': False,
-    'history_dynamic_size': 64,
+    'history_dynamic_size': 32,
     'reply_probability': 1,
     'reply_keywords': [],
     'mention_reply': True,
