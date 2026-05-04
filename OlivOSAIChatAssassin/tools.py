@@ -4,17 +4,25 @@ import threading
 import OlivOSAIChatAssassin
 
 
-# 公平锁
-class FairLock:
-    def __init__(self):
-        self._lock = threading.Lock()
-        self._cond = threading.Condition(self._lock)
-        self._next_ticket = 0
-        self._serving = 0
-        self._held = False  # 是否被持有
-        self._busy_gate = 2
-        self._busy = False
-        self._count = 0
+# 礼貌节律公平锁
+# 本锁实现以下功能
+#   - 按照获取顺序依次授予锁
+#   - 可以通过 slack 接口进行松弛等待
+#   - 当出现竞争者时立即中断松弛，令松弛失败
+#   - 松弛失败时加速下次松弛的进度
+class SlackableFairLock:
+    def __init__(self, slack_time: float, cooldown_time: float):
+        self._lock: threading.Lock = threading.Lock()
+        self._cond_acquire: threading.Condition = threading.Condition(self._lock)
+        self._cond_slack: threading.Condition = threading.Condition(self._lock)
+        self._next_ticket: int = 0
+        self._serving: int = 0
+        self._held: bool = False
+        self._count: int = 0
+        self._first_timestamp: 'float|None' = None
+        self._slack_count: int = 1
+        self._slack_time: float = slack_time
+        self._cooldown_time: float = cooldown_time
 
     def __enter__(self):
         self.acquire()
@@ -25,12 +33,14 @@ class FairLock:
 
     def acquire(self):
         with self._lock:
+            if self._first_timestamp is None:
+                self._first_timestamp = time.perf_counter()
             my_ticket = self._next_ticket
             self._next_ticket += 1
             self._count += 1
-            self._try_refresh()
+            self._cond_slack.notify_all()
             while my_ticket != self._serving:
-                self._cond.wait()
+                self._cond_acquire.wait()
             self._held = True
 
     def release(self):
@@ -40,34 +50,54 @@ class FairLock:
             self._held = False
             self._serving += 1
             self._count -= 1
-            self._try_reset()
-            self._cond.notify_all()
+            self._tryReset()
+            self._cond_acquire.notify_all()
 
-    def _try_reset(self):
+    def slack(self):
+        with self._lock:
+            if not self._held:
+                raise RuntimeError("slack unlocked lock")
+            remaining = self._getRemaining()
+            if remaining > 0:
+                self._cond_slack.wait(timeout=remaining)
+            res = self._isLast()
+            if not res:
+                self._slack_count *= 2
+            return res
+
+    def _tryReset(self):
         if 0 == self._count:
             self._next_ticket = 0
             self._serving = 0
-            self._busy = False
+            self._first_timestamp = None
+            self._slack_count = 1
+
+    def _locked(self):
+        return self._held
 
     def locked(self):
         with self._lock:
             return self._held
 
+    def _isLast(self):
+        return self._count <= 1
+
     def isLast(self):
         with self._lock:
-            return self._count == 1
+            return self._isLast()
 
-    def _try_refresh(self):
-        if self._count >= self._busy_gate:
-            self._busy = True
+    def _getRemaining(self):
+        now_timestamp = time.perf_counter()
+        return float(
+            min(
+                max(0, self._slack_time - (now_timestamp - self._first_timestamp)),
+                max(0, self._cooldown_time - (now_timestamp - self._first_timestamp)) / self._slack_count,
+            )
+        )
 
-    def setBusyGate(self, gate: int):
+    def getRemaining(self):
         with self._lock:
-            self._busy_gate = gate
-
-    def isBusy(self):
-        with self._lock:
-            return self._busy
+            return self._getRemaining()
 
 
 def sleep(sleep_time: float):

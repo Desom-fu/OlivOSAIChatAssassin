@@ -20,17 +20,7 @@ class Event:
         pass  # 本插件仅处理群聊
 
     def group_message(plugin_event, Proc):
-        # 群消息事件入口
-        group_id = str(plugin_event.data.group_id)
-        OlivOSAIChatAssassin.data.gGroupLock.setdefault(group_id, OlivOSAIChatAssassin.tools.FairLock())
-        missed = OlivOSAIChatAssassin.data.gGroupLock[group_id].locked()
-        with OlivOSAIChatAssassin.data.gGroupLock[group_id]:
-            if (
-                OlivOSAIChatAssassin.data.gGroupLock[group_id].isBusy()
-                and OlivOSAIChatAssassin.data.gGroupLock[group_id].isLast()
-            ):
-                missed = False
-            OlivOSAIChatAssassin.msg.unity_group_message(plugin_event, Proc, missed)
+        OlivOSAIChatAssassin.msg.unity_group_message(plugin_event, Proc)
 
     def poke(plugin_event, Proc):
         # 戳一戳事件入口
@@ -43,8 +33,8 @@ class Event:
     def menu(plugin_event, Proc):
         # 插件菜单事件监听
         if plugin_event.data.namespace == 'OlivOSAIChatAssassin':
-            if plugin_event.data.event == 'OlivOSAIChatAssassin_Menu_Config':
-                OlivOSAIChatAssassin.logger.log('配置：请编辑插件数据目录下的config.json文件，并重启插件。')
-            elif plugin_event.data.event == 'OlivOSAIChatAssassin_Menu_Status':
+            if plugin_event.data.event == 'OlivOSAIChatAssassin_Menu':
+                pass
+            elif plugin_event.data.event == 'OlivOSAIChatAssassin_Status':
                 status = OlivOSAIChatAssassin.msg.get_status()
                 OlivOSAIChatAssassin.logger.log(status)

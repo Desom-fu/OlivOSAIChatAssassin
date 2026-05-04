@@ -10,7 +10,7 @@ gMessageHistory: 'dict[str, OlivOSAIChatAssassin.tools.DynamicQueue]' = {}
 gConfigDir = './plugin/data/OlivOSAIChatAssassin'
 gConfigPath = './plugin/data/OlivOSAIChatAssassin/config.json'
 
-gGroupLock: 'dict[str, OlivOSAIChatAssassin.tools.FairLock]' = {}
+gGroupLock: 'dict[str, OlivOSAIChatAssassin.tools.SlackableFairLock]' = {}
 gGroupKnowledgeCounter: 'dict[str, int]' = {}
 gGroupKnowledgeCounterLimit: int = int(4 * 4)
 
@@ -38,8 +38,8 @@ configDefault = {
     'model': 'deepseek-v4-flash',
     'max_tokens': 2048,
     'temperature': 0.7,
-    "thinking": {"type": "disabled"},
-    "reasoning_effort": "max",
+    'thinking': {'type': 'disabled'},
+    'reasoning_effort': 'max',
     'personality': '你是一个伪装成人类的自豪的新锐AI，你择机加入聊天，避免过多尬聊。别让他们发现你的真实身份！！！',
     'record_knowledge': True,
     'retry_count': 3,
@@ -50,15 +50,17 @@ configDefault = {
     'history_size_min': 5,
     'history_size': 8,
     'history_dynamic': False,
-    'history_dynamic_size': 24,
+    'history_dynamic_size': 16,
+    'slack_time': 5,
+    'slack_cooldown_time': 30,
     'reply_probability': 1,
     'reply_keywords': [],
     'mention_reply': True,
     'ignore_prefixes': [],
-    'max_message_length': 2000,
-    "ocr_api": {
-        "api_key": "",
-        "api_base": "https://api.siliconflow.cn/v1/",
-        "model": "deepseek-ai/DeepSeek-OCR"
+    'max_message_length': 2048,
+    'ocr_api': {
+        'api_key': '',
+        'api_base': 'https://api.siliconflow.cn/v1/',
+        'model': 'deepseek-ai/DeepSeek-OCR'
     }
 }
