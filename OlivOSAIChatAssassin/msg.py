@@ -80,7 +80,7 @@ def unity_group_message_router(plugin_event: OlivOS.API.Event, Proc):
     if not should_reply(group_id, message, plugin_event):
         OlivOSAIChatAssassin.logger.log('SHOULD NOT')
     else:
-        reply_to_group(plugin_event, group_id)
+        reply_to_group(plugin_event, group_id, message)
 
 
 def should_ignore(message):
@@ -136,7 +136,7 @@ def should_reply(group_id, message, plugin_event):
     return False
 
 
-def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str):
+def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
     total_start = time.perf_counter()
     if not OlivOSAIChatAssassin.data.gConfig or not OlivOSAIChatAssassin.data.gConfig.get('api_key'):
         return
@@ -330,17 +330,16 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str):
         '全局': thisMemoryG,
         group_id: OlivOSAIChatAssassin.data.gMemory.get(group_id, OlivOSAIChatAssassin.data.gMemoryDefaultStr)
     }
-    message_str = plugin_event.data.message
     if not OlivOSAIChatAssassin.data.gGroupLock[group_id].slack():
         OlivOSAIChatAssassin.logger.log(
             f'NEXT - {time.perf_counter() - total_start:.2f}'
-            f'/{OlivOSAIChatAssassin.data.gGroupLock[group_id].getRemaining():.2f} s - {message_str}'
+            f'/{OlivOSAIChatAssassin.data.gGroupLock[group_id].getRemaining():.2f} s - {message}'
         )
         return
     else:
         OlivOSAIChatAssassin.logger.log(
             f'HIT - {time.perf_counter() - total_start:.2f}'
-            f'/{OlivOSAIChatAssassin.data.gGroupLock[group_id].getRemaining():.2f} s - {message_str}'
+            f'/{OlivOSAIChatAssassin.data.gGroupLock[group_id].getRemaining():.2f} s - {message}'
         )
     examples_reply = {
         'r': ['好的']
