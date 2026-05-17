@@ -3,6 +3,7 @@ import random
 import time
 import threading
 import re
+import os
 from datetime import datetime
 
 import OlivOS
@@ -29,10 +30,30 @@ def unity_group_message(plugin_event: OlivOS.API.Event, Proc):
         OlivOSAIChatAssassin.msg.unity_group_message_router(plugin_event, Proc)
 
 
+# 配置文件修改时间缓存，避免每次消息都重新加载
+_gConfigMtime: float = 0.0
+_gMemoryMtime: float = 0.0
+
+
 def unity_group_message_router(plugin_event: OlivOS.API.Event, Proc):
+    global _gConfigMtime, _gMemoryMtime
     group_id = str(plugin_event.data.group_id)
-    OlivOSAIChatAssassin.load.load_config()
-    OlivOSAIChatAssassin.load.load_memory()
+
+    # 仅在文件变化时重新加载配置和记忆（避免高频磁盘 I/O）
+    try:
+        config_mtime = os.path.getmtime(OlivOSAIChatAssassin.data.gConfigPath)
+        if config_mtime > _gConfigMtime:
+            _gConfigMtime = config_mtime
+            OlivOSAIChatAssassin.load.load_config()
+    except OSError:
+        OlivOSAIChatAssassin.load.load_config()
+    try:
+        memory_mtime = os.path.getmtime(OlivOSAIChatAssassin.data.gMemoryPath)
+        if memory_mtime > _gMemoryMtime:
+            _gMemoryMtime = memory_mtime
+            OlivOSAIChatAssassin.load.load_memory()
+    except OSError:
+        OlivOSAIChatAssassin.load.load_memory()
     if not OlivOSAIChatAssassin.data.gConfig:
         return
     # 检查是否在启用群组列表中
