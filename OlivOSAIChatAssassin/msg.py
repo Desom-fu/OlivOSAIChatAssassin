@@ -202,6 +202,9 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
             "k": {
                 "中国": "五千年文明古国，幅员辽阔，正全面推进民族复兴，坚持和平发展。"
             },
+            "u": {
+                "123456789": "一个阳光开朗的人，推测为男孩"
+            },
             "g": "我们刚刚聊到了中国"
         }
         content = '''
@@ -217,6 +220,12 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
 - 每条知识点长度限制在32字以内
 - 每条知识带有一个介于2至8字之间的关键词，被用于作为子字符串进行搜索
 - 知识点以Json对象的格式输出，知识点的关键词为键，内容为值
+'''
+        content += '''
+## 对遇到的每个用户进行心理侧写，将结果输出至u键的值中
+- 分析当前聊天记录，对遇到的每个用户进行心理侧写
+- 每条心理侧写描述的键使用用户的 user_id
+- 每条心理侧写描述长度限制在32字以内
 '''
         content += '''
 ## 总结本群聊天记录，将结果作为字符串输出至g的值中
@@ -245,15 +254,16 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
             )
             call_ai_data = json.loads(call_ai_res)
             knowledge_data: 'dict|None' = None
+            user_data: 'dict|None' = None
             group_memory_data: 'str|None' = None
             with OlivOSAIChatAssassin.data.gMemoryLock:
+                if '全局' not in OlivOSAIChatAssassin.data.gMemory:
+                    OlivOSAIChatAssassin.data.gMemory['全局'] = {}
                 if (
                     'k' in call_ai_data
                     and type(call_ai_data['k']) is dict
                 ):
                     knowledge_data = call_ai_data['k']
-                if '全局' not in OlivOSAIChatAssassin.data.gMemory:
-                    OlivOSAIChatAssassin.data.gMemory['全局'] = {}
                 if '知识缓存' not in OlivOSAIChatAssassin.data.gMemory['全局']:
                     OlivOSAIChatAssassin.data.gMemory['全局']['知识缓存'] = {}
                 for k, v in knowledge_data.items():
@@ -263,6 +273,20 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                     ):
                         OlivOSAIChatAssassin.data.gMemory['全局']['知识缓存'][k] = v
                         OlivOSAIChatAssassin.logger.log(f'[更新知识] - {k}\n{v}')
+                if (
+                    'u' in call_ai_data
+                    and type(call_ai_data['u']) is dict
+                ):
+                    user_data = call_ai_data['u']
+                if '用户侧写' not in OlivOSAIChatAssassin.data.gMemory['全局']:
+                    OlivOSAIChatAssassin.data.gMemory['全局']['用户侧写'] = {}
+                for k, v in user_data.items():
+                    if (
+                        type(k) is str
+                        and type(v) is str
+                    ):
+                        OlivOSAIChatAssassin.data.gMemory['全局']['用户侧写'][k] = v
+                        OlivOSAIChatAssassin.logger.log(f'[更新侧写] - {k}\n{v}')
                 if (
                     'g' in call_ai_data
                     and type(call_ai_data['g']) is str
@@ -327,6 +351,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
     thisMemoryG[key_gMemory_const] = {}
     for key_gMemory in (
         '人物关系',
+        '用户侧写'
     ):
         thisMemoryP = OlivOSAIChatAssassin.data.gMemory.get('全局', {key_gMemory: {}}).get(key_gMemory, {})
         if type(thisMemoryP) is dict:
