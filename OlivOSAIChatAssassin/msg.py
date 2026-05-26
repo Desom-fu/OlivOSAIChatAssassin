@@ -668,7 +668,10 @@ def msg_trans(msg: str):
 
 def msg_wash(msg: str):
     res = msg
-    res = re.sub(r'\[OP:image.+\]', '[图片：未识别成功，不应回复；意图：不明；类型：不明]', res)
-    res = re.sub(r'\[OP:record.+\]', '[语音：未识别成功，不应回复；意图：不明；类型：不明]', res)
-    res = re.sub(r'\[OP:video.+\]', '[视频：未识别成功，不应回复；意图：不明；类型：不明]', res)
+    res = re.sub(r'\[OP:image.+\]', r'[图片：未识别成功，不应回复；意图：不明；类型：不明]', res)
+    res = re.sub(r'\[OP:record.+\]', r'[语音：未识别成功，不应回复；意图：不明；类型：不明]', res)
+    res = re.sub(r'\[OP:video.+\]', r'[视频：未识别成功，不应回复；意图：不明；类型：不明]', res)
+    res = re.sub(r'\[OP:json.+?"prompt":"(.+?)".*\]', r'[卡片：\1]', res)
+    res = re.sub(r'\[OP:json.+\]', r'[卡片：未识别成功，不应回复；意图：不明；类型：不明]', res)
+    res = re.sub(r'(\[)(OP|CQ)(:.+),url=http.+,{0,1}(.*\])', r'\1OP\3\4', res)
     return res
