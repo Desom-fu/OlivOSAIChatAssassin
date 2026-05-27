@@ -742,13 +742,7 @@ def msg_trans(msg: str, group_id: str):
                         image_url=image_url
                     )
                     if type(ocr_res_data) is str:
-                        ocr_res = json.loads(
-                            OlivOSAIChatAssassin.webTools.call_ai_ocr(
-                                OlivOSAIChatAssassin.data.gConfig,
-                                prompt=prompt,
-                                image_url=image_url
-                            )
-                        )
+                        ocr_res = json.loads(ocr_res_data)
                 except Exception as e:
                     OlivOSAIChatAssassin.logger.warn(f'CALL AI OCR - ERR: {e}')
                 flag_ocr_checked = True
