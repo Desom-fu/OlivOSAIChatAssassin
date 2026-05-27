@@ -30,6 +30,8 @@ gMemoryDefaultStr = "择机加入对话"
 gStaticKnowledgeDir = './plugin/data/OlivOSAIChatAssassin/Knowledge'
 gStaticKnowledge = {}
 
+gImageDir = './plugin/data/OlivOSAIChatAssassin/Image'
+
 gPeakUpCache: 'dict[str, dict[str, dict[str, int|list]]]' = {}
 
 configDefault = {
@@ -62,6 +64,8 @@ configDefault = {
     'ocr_api': {
         'api_key': '',
         'api_base': 'https://api.siliconflow.cn/v1/',
-        'model': 'deepseek-ai/DeepSeek-OCR'
+        'model': 'Pro/moonshotai/Kimi-K2.5',
+        'mode': 'base64',
+        'enable': False
     }
 }

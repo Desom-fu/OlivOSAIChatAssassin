@@ -246,3 +246,15 @@ class DynamicQueue:
 
     def __getitem__(self, index):
         return self.queue[index]
+
+
+def opcode_parse_params(typeKey: str, markup: str) -> dict:
+    """从 '[OP:typeKey,key1=val1,key2=val2]' 提取参数为字典"""
+    # 去掉前缀 '[OP:typeKey,' 和后缀 ']'
+    inner = markup[len(f'[OP:{typeKey},'):-1]
+    params = {}
+    for part in inner.split(','):
+        if '=' in part:
+            k, v = part.split('=', 1)
+            params[k] = v
+    return params

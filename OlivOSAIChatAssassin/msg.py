@@ -67,7 +67,7 @@ def unity_group_message_router(plugin_event: OlivOS.API.Event, Proc):
         return
     # 忽略前缀消息
     message = plugin_event.data.message
-    message = msg_trans(message)
+    message, trans_map = msg_trans(message)
     message = msg_wash(message)
     if should_ignore(message):
         OlivOSAIChatAssassin.logger.log('IGNORE')
@@ -101,7 +101,7 @@ def unity_group_message_router(plugin_event: OlivOS.API.Event, Proc):
     if not should_reply(group_id, message, plugin_event):
         OlivOSAIChatAssassin.logger.log('SHOULD NOT')
     else:
-        reply_to_group(plugin_event, group_id, message)
+        reply_to_group(plugin_event, group_id, message, trans_map)
 
 
 def should_ignore(message):
@@ -161,7 +161,7 @@ def should_reply(group_id, message, plugin_event):
     return False
 
 
-def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
+def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str, trans_map: dict):
     total_start = time.perf_counter()
     if not OlivOSAIChatAssassin.data.gConfig or not OlivOSAIChatAssassin.data.gConfig.get('api_key'):
         return
@@ -428,6 +428,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
     content = f'''{contentDefault}
 # 信息
 - 最新的消息中附带当前的记忆信息
+- 最新的消息中附带可用的富文本资源
 - 越新的消息越重要
 
 # 固定记忆
@@ -440,6 +441,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
 - 判断是否应该加入聊天进行回复
 - 根据自己已经回复过的消息，避免重复已经回应过的话题，避免重复自己说过的话
 - 如果应该回复，将回复内容追加至r的值的列表中，多条消息需要分开
+- 如要发送附加信息中的图片文件，在列表中以单条消息发送的格式发送，格式 [发图片:文件名]
 
 # 参考输出，以严格的Json格式输出
 {json.dumps(examples_reply, ensure_ascii=False)}
@@ -459,7 +461,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
     OlivOSAIChatAssassin.logger.log(f"HISTORY - SIZE [{len(history)}/{history_size_max_print}]")
     messages = get_ai_context(
         OlivOSAIChatAssassin.data.gConfig, history, content,
-        patch={'当前记忆': thisMemory}
+        patch={'当前记忆': thisMemory, '附带资源': trans_map}
     )
     # 调用 API
     reply_list = None
@@ -491,7 +493,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
         else:
             reply_list = reply_wash(reply_list)
             OlivOSAIChatAssassin.logger.log(f'REPLY - {reply_list}')
-            add_message_to_history(group_id, ''.join(reply_list), None, None)
+            add_message_to_history(group_id, ''.join(reply_history_wash(reply_list)), None, None)
             t_set_memory = threading.Thread(
                 target=set_memory,
                 args=(thisMemory, )
@@ -499,7 +501,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
             t_set_memory.start()
             OlivOSAIChatAssassin.tools.sleep(1 + (random.random() * 2 - 1) * 0.95)
             reply(
-                plugin_event, reply_list,
+                plugin_event, reply_trans(reply_list),
                 total_time_past=time.perf_counter() - total_start
             )
             t_set_memory.join()
@@ -663,17 +665,145 @@ def reply_wash(msg: list):
     return res
 
 
+def reply_history_wash(msg: list):
+    res = []
+    for i in msg:
+        res_i = i
+        if type(res_i) is str:
+            res_i = re.sub(r'\[发图片:(.+)\]', '[发图片]', res_i)
+            res.append(res_i)
+    return res
+
+
+def reply_trans(msg: list):
+    res = []
+    for i in msg:
+        res_i = i
+        if type(res_i) is str:
+            res_i = re.sub(
+                r'\[发图片:(.+)\]',
+                f'[OP:image,file=file:///{os.path.abspath(OlivOSAIChatAssassin.data.gImageDir)}/\\1]',
+                res_i
+            )
+            res.append(res_i)
+    return res
+
+
 def msg_trans(msg: str):
     res = msg
-    return res
+    res_map = {}
+
+    def process_image(match: re.Match) -> str:
+        original = match.group(0)
+        res = original
+        params = OlivOSAIChatAssassin.tools.opcode_parse_params('image', original)
+        res_data = None
+        examples_reply = {
+            "content": "内容描述",
+            "intent": "意图描述",
+            "type": "类型描述"
+        }
+        if (
+            'file' in params
+            and type(params['file']) is str
+            and 'url' in params
+            and type(params['url']) is str
+        ):
+            if params['file'] in OlivOSAIChatAssassin.data.gMemory.get('全局', {}).get('图像缓存', {}):
+                res_data = OlivOSAIChatAssassin.data.gMemory.get('全局', {}).get('图像缓存', {}).get(params['file'])
+            else:
+                image_url = params['url']
+                if OlivOSAIChatAssassin.data.gConfig.get('ocr_api', {}).get('mode', 'base64'):
+                    image_url = OlivOSAIChatAssassin.webTools.download_image_to_base64(
+                        url=image_url,
+                        save_dir=OlivOSAIChatAssassin.data.gImageDir,
+                        filename=params['file']
+                    )
+                prompt = f'''
+# 当前任务
+## 识别图片并分析相关信息，以Json格式输出
+- 用户是一个盲人，正在群聊中聊天，请识别图片并分析相关信息
+- 尽量精确的描述这个图片的内容，32字以内，单行内，输出到 "content" 键的值中
+- 如果有角色，识别的内容也应该尽量识别角色
+- 为用户分析这张图片的意图，32字以内，单行内，输出到 "intent" 键的值中
+- 分析这个图片的类型，例如表情包、梗图、照片、普通图片，输出到 "type" 键的值中
+- 以JSON格式输出
+# 参考输出，以严格的Json格式输出
+{json.dumps(examples_reply, ensure_ascii=False)}
+'''
+                ocr_res = {}
+                try:
+                    ocr_res_data = OlivOSAIChatAssassin.webTools.call_ai_ocr(
+                        OlivOSAIChatAssassin.data.gConfig,
+                        prompt=prompt,
+                        image_url=image_url
+                    )
+                    if type(ocr_res_data) is str:
+                        ocr_res = json.loads(
+                            OlivOSAIChatAssassin.webTools.call_ai_ocr(
+                                OlivOSAIChatAssassin.data.gConfig,
+                                prompt=prompt,
+                                image_url=image_url
+                            )
+                        )
+                except Exception as e:
+                    OlivOSAIChatAssassin.logger.warn(f'CALL AI OCR - ERR: {e}')
+                flag_ocr_checked = True
+                if type(ocr_res) is dict:
+                    for i in examples_reply:
+                        if not (
+                            i in ocr_res
+                            and type(ocr_res[i]) is type(examples_reply[i])
+                        ):
+                            flag_ocr_checked = False
+                            break
+                else:
+                    flag_ocr_checked = False
+                if flag_ocr_checked:
+                    OlivOSAIChatAssassin.data.gMemory.setdefault('全局', {})
+                    OlivOSAIChatAssassin.data.gMemory['全局'].setdefault('图像缓存', {})
+                    OlivOSAIChatAssassin.data.gMemory['全局']['图像缓存'][params['file']] = ocr_res
+                    res_data = ocr_res
+                    OlivOSAIChatAssassin.load.write_memory()
+        flag_res_data_checked = False
+        if type(res_data) is dict:
+            flag_res_data_checked = True
+            for i in examples_reply:
+                if not (
+                    i in res_data
+                    and type(res_data[i]) is type(examples_reply[i])
+                ):
+                    flag_res_data_checked = False
+                    break
+        if flag_res_data_checked:
+            if (
+                'file' in params
+                and type(params['file']) is str
+            ):
+                res_map[params['file']] = res_data
+            res = (
+                f"[图片：{res_data.get('content', '未识别成功')}"
+                f"；意图：{res_data.get('intent', '不明')}"
+                f"；类型：{res_data.get('type', '不明')}]"
+            )
+        return res
+    if OlivOSAIChatAssassin.data.gConfig.get(
+        'ocr_api',
+        OlivOSAIChatAssassin.data.configDefault['ocr_api']
+    ).get(
+        'enable',
+        OlivOSAIChatAssassin.data.configDefault['ocr_api']['enable']
+    ):
+        res = re.sub(r'\[OP:image.+?\]', process_image, res)
+    return res, res_map
 
 
 def msg_wash(msg: str):
     res = msg
-    res = re.sub(r'\[OP:image.+\]', r'[图片：未识别成功，不应回复；意图：不明；类型：不明]', res)
-    res = re.sub(r'\[OP:record.+\]', r'[语音：未识别成功，不应回复；意图：不明；类型：不明]', res)
-    res = re.sub(r'\[OP:video.+\]', r'[视频：未识别成功，不应回复；意图：不明；类型：不明]', res)
-    res = re.sub(r'\[OP:json.+?"prompt":"(.+?)".*\]', r'[卡片：\1]', res)
-    res = re.sub(r'\[OP:json.+\]', r'[卡片：未识别成功，不应回复；意图：不明；类型：不明]', res)
-    res = re.sub(r'(\[)(OP|CQ)(:.+),url=http.+,{0,1}(.*\])', r'\1OP\3\4', res)
+    res = re.sub(r'\[OP:image.+?\]', r'[图片：未识别成功，不应回复；意图：不明；类型：不明]', res)
+    res = re.sub(r'\[OP:record.+?\]', r'[语音：未识别成功，不应回复；意图：不明；类型：不明]', res)
+    res = re.sub(r'\[OP:video.+?\]', r'[视频：未识别成功，不应回复；意图：不明；类型：不明]', res)
+    res = re.sub(r'\[OP:json.+?"prompt":"(.+?)".*?\]', r'[卡片：\1]', res)
+    res = re.sub(r'\[OP:json.+?\]', r'[卡片：未识别成功，不应回复；意图：不明；类型：不明]', res)
+    res = re.sub(r'(\[)(OP|CQ)(:.+?),url=http.+,{0,1}(.*?\])', r'\1OP\3\4', res)
     return res
