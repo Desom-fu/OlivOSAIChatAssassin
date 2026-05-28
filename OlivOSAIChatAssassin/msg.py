@@ -445,8 +445,8 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
     }
     content = f'''{contentDefault}
 # 信息
+- 历史和最新消息中都附带可用的富文本资源，可以借用，但不要编造不存在的资源
 - 最新的消息中附带当前的记忆信息
-- 最新的消息中附带可用的富文本资源
 - 越新的消息越重要
 
 # 固定记忆
