@@ -146,6 +146,7 @@ class DataManager:
 
         self._config_path[bot_hash] = target_path
         self._config_mtime[bot_hash] = os.path.getmtime(target_path)
+        OlivOSAIChatAssassin.logger.log(f"CONFIG FILE LOADED - {target_path}")
         return config
 
     def _load_bot_memory(self, bot_hash: str) -> dict:
@@ -187,6 +188,7 @@ class DataManager:
 
         self._memory_path[bot_hash] = target_path
         self._memory_mtime[bot_hash] = os.path.getmtime(target_path)
+        OlivOSAIChatAssassin.logger.log(f"MEMORY FILE LOADED - {target_path}")
         return memory
 
     def load_bot(self, bot_hash: str, force: bool = False):
