@@ -6,8 +6,10 @@ import OlivOSAIChatAssassin
 
 gProc: 'OlivOS.pluginAPI.shallow|None' = None
 gPluginName = '群聊刺客'
-gConfig: 'dict|None' = None
 gMessageHistory: 'dict[str, OlivOSAIChatAssassin.tools.DynamicQueue]' = {}
+
+gData: 'OlivOSAIChatAssassin.load.DataManager|None' = None
+
 gConfigDir = './plugin/data/OlivOSAIChatAssassin'
 gConfigPath = './plugin/data/OlivOSAIChatAssassin/config.json'
 
@@ -15,9 +17,10 @@ gGroupLock: 'dict[str, OlivOSAIChatAssassin.tools.SlackableFairLock]' = {}
 gGroupKnowledgeCounter: 'dict[str, int]' = {}
 gGroupKnowledgeCounterLimit: int = int(4 * 4)
 
+gMemoryLock = threading.Lock()
 gMemoryDir = './plugin/data/OlivOSAIChatAssassin'
 gMemoryPath = './plugin/data/OlivOSAIChatAssassin/memory.json'
-gMemory = {
+gMemoryDefault = {
     '全局': {
         '知识搜索': {},
         '知识缓存': {},
@@ -26,7 +29,6 @@ gMemory = {
         '图片缓存': {}
     }
 }
-gMemoryLock = threading.Lock()
 gMemoryDefaultStr = "择机加入对话"
 
 gStaticKnowledgeDir = './plugin/data/OlivOSAIChatAssassin/Knowledge'

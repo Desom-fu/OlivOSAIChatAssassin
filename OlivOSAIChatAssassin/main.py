@@ -1,3 +1,4 @@
+import OlivOS
 import OlivOSAIChatAssassin
 
 
@@ -6,14 +7,13 @@ class Event:
         # 初始化流程
         pass
 
-    def init_after(plugin_event, Proc):
+    def init_after(plugin_event, Proc: OlivOS.pluginAPI.shallow):
         # 初始化后处理流程
-        OlivOSAIChatAssassin.data.gProc = Proc
-        OlivOSAIChatAssassin.load.load_config()
+        bot_hash_list = list(Proc.Proc_data['bot_info_dict'].keys())
+        OlivOSAIChatAssassin.load.load_init_after()
+        OlivOSAIChatAssassin.load.load_logger(Proc)
+        OlivOSAIChatAssassin.load.load_bot(bot_hash_list)
         OlivOSAIChatAssassin.load.load_staticKnowledge()
-        OlivOSAIChatAssassin.load.load_memory()
-        # 初始化消息历史
-        OlivOSAIChatAssassin.data.gMessageHistory = {}
 
     def private_message(plugin_event, Proc):
         # 私聊消息事件入口
@@ -35,6 +35,3 @@ class Event:
         if plugin_event.data.namespace == 'OlivOSAIChatAssassin':
             if plugin_event.data.event == 'OlivOSAIChatAssassin_Menu':
                 pass
-            elif plugin_event.data.event == 'OlivOSAIChatAssassin_Status':
-                status = OlivOSAIChatAssassin.msg.get_status()
-                OlivOSAIChatAssassin.logger.log(status)

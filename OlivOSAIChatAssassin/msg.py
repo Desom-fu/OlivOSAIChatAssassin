@@ -6,6 +6,7 @@ import re
 import os
 from datetime import datetime
 from collections import deque
+from typing import Optional
 
 import OlivOS
 import OlivOSAIChatAssassin
@@ -14,14 +15,15 @@ import OlivOSAIChatAssassin
 def unity_group_message(plugin_event: OlivOS.API.Event, Proc):
     # 群消息事件入口
     group_id = str(plugin_event.data.group_id)
+    bot_hash = plugin_event.bot_info.hash
     OlivOSAIChatAssassin.data.gGroupLock.setdefault(
         group_id,
         OlivOSAIChatAssassin.tools.SlackableFairLock(
-            slack_time=OlivOSAIChatAssassin.data.gConfig.get(
+            slack_time=OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
                 'slack_time',
                 OlivOSAIChatAssassin.data.configDefault['slack_time']
             ),
-            cooldown_time=OlivOSAIChatAssassin.data.gConfig.get(
+            cooldown_time=OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
                 'slack_cooldown_time',
                 OlivOSAIChatAssassin.data.configDefault['slack_cooldown_time']
             )
@@ -31,62 +33,44 @@ def unity_group_message(plugin_event: OlivOS.API.Event, Proc):
         OlivOSAIChatAssassin.msg.unity_group_message_router(plugin_event, Proc)
 
 
-# 配置文件修改时间缓存，避免每次消息都重新加载
-_gConfigMtime: float = 0.0
-_gMemoryMtime: float = 0.0
-
-
 def unity_group_message_router(plugin_event: OlivOS.API.Event, Proc):
-    global _gConfigMtime, _gMemoryMtime
     group_id = str(plugin_event.data.group_id)
+    bot_hash = plugin_event.bot_info.hash
 
     # 仅在文件变化时重新加载配置和记忆（避免高频磁盘 I/O）
-    try:
-        config_mtime = os.path.getmtime(OlivOSAIChatAssassin.data.gConfigPath)
-        if config_mtime > _gConfigMtime:
-            _gConfigMtime = config_mtime
-            OlivOSAIChatAssassin.load.load_config()
-    except OSError:
-        OlivOSAIChatAssassin.load.load_config()
-    try:
-        memory_mtime = os.path.getmtime(OlivOSAIChatAssassin.data.gMemoryPath)
-        if memory_mtime > _gMemoryMtime:
-            _gMemoryMtime = memory_mtime
-            OlivOSAIChatAssassin.load.load_memory()
-    except OSError:
-        OlivOSAIChatAssassin.load.load_memory()
-    if not OlivOSAIChatAssassin.data.gConfig:
+    OlivOSAIChatAssassin.data.gData.reload(bot_hash)
+    if not OlivOSAIChatAssassin.data.gData.getConfig(bot_hash):
         return
     # 检查是否在启用群组列表中
     if (
-        'enabled_groups' in OlivOSAIChatAssassin.data.gConfig
+        'enabled_groups' in OlivOSAIChatAssassin.data.gData.getConfig(bot_hash)
         and (
-            group_id not in OlivOSAIChatAssassin.data.gConfig['enabled_groups']
-            and 'all' not in OlivOSAIChatAssassin.data.gConfig['enabled_groups']
+            group_id not in OlivOSAIChatAssassin.data.gData.getConfig(bot_hash)['enabled_groups']
+            and 'all' not in OlivOSAIChatAssassin.data.gData.getConfig(bot_hash)['enabled_groups']
         )
     ):
         return
     # 忽略前缀消息
     message = plugin_event.data.message
-    message = msg_trans(message, group_id)
+    message = msg_trans(message, group_id, bot_hash=bot_hash)
     message = msg_wash(message)
-    if should_ignore(message):
+    if should_ignore(message, bot_hash=bot_hash):
         OlivOSAIChatAssassin.logger.log('IGNORE')
         return
     # 添加消息到历史
     if group_id not in OlivOSAIChatAssassin.data.gMessageHistory:
         OlivOSAIChatAssassin.data.gMessageHistory[group_id] = OlivOSAIChatAssassin.tools.DynamicQueue(
-            keep=OlivOSAIChatAssassin.data.gConfig.get(
+            keep=OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
                 'history_size', OlivOSAIChatAssassin.data.configDefault['history_size']
             ),
             max_grow=(
-                OlivOSAIChatAssassin.data.gConfig.get(
+                OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
                     'history_dynamic_size', OlivOSAIChatAssassin.data.configDefault['history_dynamic_size'],
                 )
-                if OlivOSAIChatAssassin.data.gConfig.get(
+                if OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
                     'history_dynamic', OlivOSAIChatAssassin.data.configDefault['history_dynamic'],
                 ) is True else
-                OlivOSAIChatAssassin.data.gConfig.get(
+                OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
                     'history_size', OlivOSAIChatAssassin.data.configDefault['history_size'],
                 )
             )
@@ -96,33 +80,39 @@ def unity_group_message_router(plugin_event: OlivOS.API.Event, Proc):
         message_id = None
     add_message_to_history(
         group_id, message, plugin_event.data.user_id, plugin_event.data.sender.get('nickname', '用户'),
-        message_id=message_id
+        message_id=message_id,
+        bot_hash=bot_hash
     )
     # 决定是否回复
-    if not should_reply(group_id, message, plugin_event):
+    if not should_reply(group_id, message, plugin_event, bot_hash=bot_hash):
         OlivOSAIChatAssassin.logger.log('SHOULD NOT')
     else:
         reply_to_group(plugin_event, group_id, message)
 
 
-def should_ignore(message):
-    if not OlivOSAIChatAssassin.data.gConfig:
+def should_ignore(message, bot_hash: str):
+    if not OlivOSAIChatAssassin.data.gData.getConfig(bot_hash):
         return False
     if len(message) <= 0:
         return True
-    ignore_prefixes = OlivOSAIChatAssassin.data.gConfig.get('ignore_prefixes', [])
+    ignore_prefixes = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get('ignore_prefixes', [])
     for prefix in ignore_prefixes:
         if message.startswith(prefix):
             return True
     return False
 
 
-def add_message_to_history(group_id, message, user_id, nickname, message_id: 'str|None' = None):
+def add_message_to_history(
+    group_id, message, user_id, nickname,
+    message_id: 'str|None' = None,
+    *,
+    bot_hash: Optional[str] = None
+):
     if group_id not in OlivOSAIChatAssassin.data.gMessageHistory:
         return
     timestamp = time.time()
     message_new = message
-    max_len = OlivOSAIChatAssassin.data.gConfig.get(
+    max_len = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
         'max_message_length',
         OlivOSAIChatAssassin.data.configDefault['max_message_length']
     )
@@ -140,21 +130,21 @@ def add_message_to_history(group_id, message, user_id, nickname, message_id: 'st
     OlivOSAIChatAssassin.data.gMessageHistory[group_id].append(msg_entry)
 
 
-def should_reply(group_id, message, plugin_event):
-    if not OlivOSAIChatAssassin.data.gConfig:
+def should_reply(group_id, message, plugin_event, bot_hash: str):
+    if not OlivOSAIChatAssassin.data.gData.getConfig(bot_hash):
         return False
     # 检查是否被@
     self_id = plugin_event.base_info['self_id']
     mention_str = f'[OP:at,id={self_id}]'
-    if OlivOSAIChatAssassin.data.gConfig.get('mention_reply', True) and mention_str in message:
+    if OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get('mention_reply', True) and mention_str in message:
         return True
     # 检查是否包含关键词
-    keywords = OlivOSAIChatAssassin.data.gConfig.get('reply_keywords', [])
+    keywords = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get('reply_keywords', [])
     for kw in keywords:
         if kw in message:
             return True
     # 随机概率回复
-    prob = OlivOSAIChatAssassin.data.gConfig.get(
+    prob = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
         'reply_probability', OlivOSAIChatAssassin.data.configDefault["reply_probability"]
     )
     if random.random() < prob:
@@ -163,22 +153,26 @@ def should_reply(group_id, message, plugin_event):
 
 
 def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
+    bot_hash = plugin_event.bot_info.hash
     total_start = time.perf_counter()
-    if not OlivOSAIChatAssassin.data.gConfig or not OlivOSAIChatAssassin.data.gConfig.get('api_key'):
+    if (
+        not OlivOSAIChatAssassin.data.gData.getConfig(bot_hash)
+        or not OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get('api_key')
+    ):
         return
     # 构建对话历史
     history: 'list[dict]' = list(OlivOSAIChatAssassin.data.gMessageHistory.get(group_id, []))
     if not history:
         return
-    elif len(history) <= OlivOSAIChatAssassin.data.gConfig.get(
+    elif len(history) <= OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
         'history_size_min', OlivOSAIChatAssassin.data.configDefault['history_size_min']
     ):
         OlivOSAIChatAssassin.logger.log('HISTORY TOO SHORT')
         return
     self_id = plugin_event.base_info['self_id']
     mention_str = f'[OP:at,id={self_id}]'
-    personality = OlivOSAIChatAssassin.data.gConfig.get('personality', '')
-    record_knowledge = OlivOSAIChatAssassin.data.gConfig.get('record_knowledge', True)
+    personality = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get('personality', '')
+    record_knowledge = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get('record_knowledge', True)
     contentDefault = f'''
 # 规则
 - 你是一个人类，这是你日常水群的群聊，你会根据你的人格设定自行决定要不要参与群聊对话
@@ -242,15 +236,20 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
 {json.dumps(examples_knowledge, ensure_ascii=False)}
 '''
         # 格式化历史为OpenAI消息格式
+        summary = (
+            OlivOSAIChatAssassin.data.gData
+            .getMemory(bot_hash)
+            .get(group_id, OlivOSAIChatAssassin.data.gMemoryDefaultStr)
+        )
         messages = get_ai_context(
-            OlivOSAIChatAssassin.data.gConfig, history, content, flagMerge=True,
+            OlivOSAIChatAssassin.data.gData.getConfig(bot_hash), history, content, flagMerge=True,
             prefix='现在提炼如下对话中的重要知识点：',
-            patch=f'前情提要：{OlivOSAIChatAssassin.data.gMemory.get(group_id, OlivOSAIChatAssassin.data.gMemoryDefaultStr)}'
+            patch=f'前情提要：{summary}'
         )
         # 调用 API
         try:
             call_ai_res = OlivOSAIChatAssassin.webTools.call_ai(
-                OlivOSAIChatAssassin.data.gConfig, messages,
+                OlivOSAIChatAssassin.data.gData.getConfig(bot_hash), messages,
                 temperature_override=0.7,
                 flag_thinking_override=False,
                 reasoning_effort_override="max",
@@ -261,44 +260,46 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
             user_data: 'dict|None' = None
             group_memory_data: 'str|None' = None
             with OlivOSAIChatAssassin.data.gMemoryLock:
-                if '全局' not in OlivOSAIChatAssassin.data.gMemory:
-                    OlivOSAIChatAssassin.data.gMemory['全局'] = {}
+                if '全局' not in OlivOSAIChatAssassin.data.gData.getMemory(bot_hash):
+                    OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局'] = {}
                 if (
                     'k' in call_ai_data
                     and type(call_ai_data['k']) is dict
                 ):
                     knowledge_data = call_ai_data['k']
-                if '知识缓存' not in OlivOSAIChatAssassin.data.gMemory['全局']:
-                    OlivOSAIChatAssassin.data.gMemory['全局']['知识缓存'] = {}
+                if '知识缓存' not in OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']:
+                    OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']['知识缓存'] = {}
                 for k, v in knowledge_data.items():
                     if (
                         type(k) is str
                         and type(v) is str
                     ):
-                        OlivOSAIChatAssassin.data.gMemory['全局']['知识缓存'][k] = v
+                        OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']['知识缓存'][k] = v
                         OlivOSAIChatAssassin.logger.log(f'[更新知识] - {k}\n{v}')
                 if (
                     'u' in call_ai_data
                     and type(call_ai_data['u']) is dict
                 ):
                     user_data = call_ai_data['u']
-                if '用户侧写' not in OlivOSAIChatAssassin.data.gMemory['全局']:
-                    OlivOSAIChatAssassin.data.gMemory['全局']['用户侧写'] = {}
+                if '用户侧写' not in OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']:
+                    OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']['用户侧写'] = {}
                 for k, v in user_data.items():
                     if (
                         type(k) is str
                         and type(v) is str
                     ):
-                        OlivOSAIChatAssassin.data.gMemory['全局']['用户侧写'][k] = v
+                        OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']['用户侧写'][k] = v
                         OlivOSAIChatAssassin.logger.log(f'[更新侧写] - {k}\n{v}')
                 if (
                     'g' in call_ai_data
                     and type(call_ai_data['g']) is str
                 ):
                     group_memory_data = call_ai_data['g']
-                OlivOSAIChatAssassin.data.gMemory[group_id] = group_memory_data
-                OlivOSAIChatAssassin.logger.log(f'[本群记忆]\n{OlivOSAIChatAssassin.data.gMemory[group_id]}')
-            OlivOSAIChatAssassin.load.write_memory()
+                OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)[group_id] = group_memory_data
+                OlivOSAIChatAssassin.logger.log(
+                    f'[本群记忆]\n{OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)[group_id]}'
+                )
+            OlivOSAIChatAssassin.load.write_memory(bot_hash=bot_hash)
         except Exception as e:
             OlivOSAIChatAssassin.logger.warn(f'API FATAL: {e}')
 
@@ -306,7 +307,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
     thisMemoryC = {}
     thisMemoryG = {}
     with OlivOSAIChatAssassin.data.gMemoryLock:
-        for k, v in OlivOSAIChatAssassin.data.gMemory.get('全局', {}).items():
+        for k, v in OlivOSAIChatAssassin.data.gData.getMemory(bot_hash).get('全局', {}).items():
             if k not in (
                 '人物关系',
                 '知识缓存',
@@ -325,7 +326,12 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
         '知识搜索',
     ):
         start = time.perf_counter()
-        thisMemoryM = OlivOSAIChatAssassin.data.gMemory.get('全局', {key_gMemory: {}}).get(key_gMemory, {})
+        thisMemoryM = (
+            OlivOSAIChatAssassin.data.gData
+            .getMemory(bot_hash)
+            .get('全局', {key_gMemory: {}})
+            .get(key_gMemory, {})
+        )
         rate_this = 0.1
         thisMemoryG_patch: dict[str, str] = {}
         if key_gMemory == key_staticKnowledge:
@@ -342,7 +348,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                     target=target_str,
                     dictMap=thisMemoryM,
                     dictName=key_gMemory,
-                    ageing=OlivOSAIChatAssassin.data.gConfig.get(
+                    ageing=OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
                         'search_ageing',
                         OlivOSAIChatAssassin.data.configDefault['search_ageing']
                     ),
@@ -351,7 +357,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                 )
             )
         for _ in range(
-            OlivOSAIChatAssassin.data.gConfig.get(
+            OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
                 'search_knowledge_deepin',
                 OlivOSAIChatAssassin.data.configDefault['search_knowledge_deepin'],
             )
@@ -363,7 +369,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                         target=thisMemoryG_patch[mem_this_data],
                         dictMap=thisMemoryM,
                         dictName=key_gMemory,
-                        ageing=OlivOSAIChatAssassin.data.gConfig.get(
+                        ageing=OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
                             'search_ageing',
                             OlivOSAIChatAssassin.data.configDefault['search_ageing']
                         ),
@@ -382,7 +388,12 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
         '人物关系',
         '用户侧写'
     ):
-        thisMemoryP = OlivOSAIChatAssassin.data.gMemory.get('全局', {key_gMemory: {}}).get(key_gMemory, {})
+        thisMemoryP = (
+            OlivOSAIChatAssassin.data.gData
+            .getMemory(bot_hash)
+            .get('全局', {key_gMemory: {}})
+            .get(key_gMemory, {})
+        )
         if type(thisMemoryP) is dict:
             for k, v in thisMemoryP.items():
                 flagHit = False
@@ -412,7 +423,11 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                     thisMemoryG[key_gMemory_const][k] = v
     thisMemory = {
         '全局': thisMemoryG,
-        group_id: OlivOSAIChatAssassin.data.gMemory.get(group_id, OlivOSAIChatAssassin.data.gMemoryDefaultStr)
+        group_id: (
+            OlivOSAIChatAssassin.data.gData
+            .getMemory(bot_hash)
+            .get(group_id, OlivOSAIChatAssassin.data.gMemoryDefaultStr)
+        )
     }
     if not OlivOSAIChatAssassin.data.gGroupLock[group_id].slack():
         OlivOSAIChatAssassin.logger.log(
@@ -451,26 +466,26 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
 '''
     # 格式化历史为OpenAI消息格式
     history_size_max_print = (
-        OlivOSAIChatAssassin.data.gConfig.get(
+        OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
             'history_dynamic_size', OlivOSAIChatAssassin.data.configDefault['history_dynamic_size'],
         )
-        if OlivOSAIChatAssassin.data.gConfig.get(
+        if OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
             'history_dynamic', OlivOSAIChatAssassin.data.configDefault['history_dynamic'],
         ) is True else
-        OlivOSAIChatAssassin.data.gConfig.get(
+        OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
             'history_size', OlivOSAIChatAssassin.data.configDefault['history_size'],
         )
     )
     OlivOSAIChatAssassin.logger.log(f"HISTORY - SIZE [{len(history)}/{history_size_max_print}]")
     messages_patch = {'当前记忆': thisMemory, '图片缓存': dict(OlivOSAIChatAssassin.data.gImageCache.get(group_id, {}))}
     messages = get_ai_context(
-        OlivOSAIChatAssassin.data.gConfig, history, content,
+        OlivOSAIChatAssassin.data.gData.getConfig(bot_hash), history, content,
         patch=messages_patch
     )
     # 调用 API
     reply_list = None
     reply_count = 0
-    retry_count = OlivOSAIChatAssassin.data.gConfig.get(
+    retry_count = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
         "retry_count", OlivOSAIChatAssassin.data.configDefault["retry_count"]
     )
     try:
@@ -482,7 +497,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
             OlivOSAIChatAssassin.logger.log(f"CALL AI - TRY [{reply_count}/{retry_count}]")
             reply_list = get_json_message(
                 OlivOSAIChatAssassin.webTools.call_ai(
-                    OlivOSAIChatAssassin.data.gConfig, messages,
+                    OlivOSAIChatAssassin.data.gData.getConfig(bot_hash), messages,
                     response_format_override={"type": "json_object"}
                 )
             )
@@ -495,9 +510,9 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
         if len(reply_list) <= 0:
             OlivOSAIChatAssassin.logger.log('SKIP')
         else:
-            reply_list = reply_wash(reply_list)
+            reply_list = reply_wash(reply_list, bot_hash=bot_hash)
             OlivOSAIChatAssassin.logger.log(f'REPLY - {reply_list}')
-            add_message_to_history(group_id, ''.join(reply_history_wash(reply_list)), None, None)
+            add_message_to_history(group_id, ''.join(reply_history_wash(reply_list)), None, None, bot_hash=bot_hash)
             t_set_memory = threading.Thread(
                 target=set_memory,
                 args=(thisMemory, )
@@ -589,37 +604,16 @@ def get_json_message(data_str: str):
     return res_list
 
 
-def get_status():
-    status_lines = []
-    status_lines.append('状态')
-    if OlivOSAIChatAssassin.data.gConfig:
-        status_lines.append(f'已加载配置: {len(OlivOSAIChatAssassin.data.gConfig.get("enabled_groups", []))} 个启用群组')
-        status_lines.append(f'API密钥: {"已设置" if OlivOSAIChatAssassin.data.gConfig.get("api_key") else "未设置"}')
-        history_size = OlivOSAIChatAssassin.data.gConfig.get(
-            "history_size", OlivOSAIChatAssassin.data.configDefault["history_size"]
-        )
-        status_lines.append(f'历史记录大小: {history_size}')
-        reply_probability = OlivOSAIChatAssassin.data.gConfig.get(
-            "reply_probability", OlivOSAIChatAssassin.data.configDefault["reply_probability"]
-        )
-        status_lines.append(f'回复概率: {reply_probability}')
-        for group_id, history in OlivOSAIChatAssassin.data.gMessageHistory.items():
-            status_lines.append(f'群 {group_id}: {len(history)} 条历史消息')
-    else:
-        status_lines.append('配置未加载')
-    return '\n'.join(status_lines)
-
-
-def send_message_force(botHash, send_type, target_id, message):
+def send_message_force(bot_hash, send_type, target_id, message):
     Proc = OlivOSAIChatAssassin.data.gProc
     if (
         Proc is not None
-        and botHash in Proc.Proc_data['bot_info_dict']
+        and bot_hash in Proc.Proc_data['bot_info_dict']
     ):
         pluginName = OlivOSAIChatAssassin.data.gPluginName
         plugin_event = OlivOS.API.Event(
             OlivOS.contentAPI.fake_sdk_event(
-                bot_info=Proc.Proc_data['bot_info_dict'][botHash],
+                bot_info=Proc.Proc_data['bot_info_dict'][bot_hash],
                 fakename=pluginName
             ),
             Proc.log
@@ -648,10 +642,10 @@ def reply(plugin_event, msg: list, total_time_past: float = 0.0):
             plugin_event.reply(i)
 
 
-def reply_wash(msg: list):
+def reply_wash(msg: list, bot_hash: str):
     res = []
     # 限制消息长度
-    max_len = OlivOSAIChatAssassin.data.gConfig.get(
+    max_len = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
         'max_message_length',
         OlivOSAIChatAssassin.data.configDefault['max_message_length']
     )
@@ -683,17 +677,18 @@ def reply_trans(msg: list):
     res = []
     for i in msg:
         res_i = i
+        image_dir = os.path.abspath(OlivOSAIChatAssassin.data.gImageDir)
         if type(res_i) is str:
             res_i = re.sub(
                 r'\[发图片:(.+)\]',
-                f'[OP:image,file=file:///{os.path.abspath(OlivOSAIChatAssassin.data.gImageDir)}/\\1]',
+                lambda m: f'[OP:image,file=file:///{image_dir}/{m.group(1)}]',
                 res_i
             )
             res.append(res_i)
     return res
 
 
-def msg_trans(msg: str, group_id: str):
+def msg_trans(msg: str, group_id: str, *, bot_hash: str):
     res = msg
 
     def process_image(match: re.Match) -> str:
@@ -712,11 +707,17 @@ def msg_trans(msg: str, group_id: str):
             and 'url' in params
             and type(params['url']) is str
         ):
-            if params['file'] in OlivOSAIChatAssassin.data.gMemory.get('全局', {}).get('图片缓存', {}):
-                res_data = OlivOSAIChatAssassin.data.gMemory.get('全局', {}).get('图片缓存', {}).get(params['file'])
+            if params['file'] in OlivOSAIChatAssassin.data.gData.getMemory(bot_hash).get('全局', {}).get('图片缓存', {}):
+                res_data = (
+                    OlivOSAIChatAssassin.data.gData
+                    .getMemory(bot_hash)
+                    .get('全局', {})
+                    .get('图片缓存', {})
+                    .get(params['file'])
+                )
             else:
                 image_url = params['url']
-                if OlivOSAIChatAssassin.data.gConfig.get('ocr_api', {}).get('mode', 'base64'):
+                if OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get('ocr_api', {}).get('mode', 'base64'):
                     image_url = OlivOSAIChatAssassin.webTools.download_image_to_base64(
                         url=image_url,
                         save_dir=OlivOSAIChatAssassin.data.gImageDir,
@@ -737,7 +738,7 @@ def msg_trans(msg: str, group_id: str):
                 ocr_res = {}
                 try:
                     ocr_res_data = OlivOSAIChatAssassin.webTools.call_ai_ocr(
-                        OlivOSAIChatAssassin.data.gConfig,
+                        OlivOSAIChatAssassin.data.gData.getConfig(bot_hash),
                         prompt=prompt,
                         image_url=image_url
                     )
@@ -757,11 +758,11 @@ def msg_trans(msg: str, group_id: str):
                 else:
                     flag_ocr_checked = False
                 if flag_ocr_checked:
-                    OlivOSAIChatAssassin.data.gMemory.setdefault('全局', {})
-                    OlivOSAIChatAssassin.data.gMemory['全局'].setdefault('图片缓存', {})
-                    OlivOSAIChatAssassin.data.gMemory['全局']['图片缓存'][params['file']] = ocr_res
+                    OlivOSAIChatAssassin.data.gData.getMemory(bot_hash).setdefault('全局', {})
+                    OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局'].setdefault('图片缓存', {})
+                    OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']['图片缓存'][params['file']] = ocr_res
                     res_data = ocr_res
-                    OlivOSAIChatAssassin.load.write_memory()
+                    OlivOSAIChatAssassin.load.write_memory(bot_hash=bot_hash)
         flag_res_data_checked = False
         if type(res_data) is dict:
             flag_res_data_checked = True
@@ -780,7 +781,7 @@ def msg_trans(msg: str, group_id: str):
                 OlivOSAIChatAssassin.data.gImageCache.setdefault(
                     group_id,
                     deque(
-                        maxlen=OlivOSAIChatAssassin.data.gConfig.get(
+                        maxlen=OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
                             'ocr_api',
                             OlivOSAIChatAssassin.data.configDefault['ocr_api']
                         ).get(
@@ -796,7 +797,7 @@ def msg_trans(msg: str, group_id: str):
                 f"；类型：{res_data.get('type', '不明')}]"
             )
         return res
-    if OlivOSAIChatAssassin.data.gConfig.get(
+    if OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
         'ocr_api',
         OlivOSAIChatAssassin.data.configDefault['ocr_api']
     ).get(
