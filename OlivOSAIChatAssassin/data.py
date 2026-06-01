@@ -47,6 +47,7 @@ configDefault = {
     'temperature': 0.7,
     'thinking': {'type': 'disabled'},
     'reasoning_effort': 'max',
+    'first_thinking': False,
     'personality': '你是一个伪装成人类的自豪的新锐AI，你择机加入聊天，避免过多尬聊。别让他们发现你的真实身份！！！',
     'record_knowledge': True,
     'search_knowledge_deepin': 1,

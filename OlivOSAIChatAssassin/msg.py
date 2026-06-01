@@ -496,15 +496,20 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
         ):
             reply_count += 1
             OlivOSAIChatAssassin.logger.log(f"CALL AI - TRY [{reply_count}/{retry_count}]")
+            first_thinking = (
+                OlivOSAIChatAssassin.data.gData.getConfig(bot_hash)
+                .get('first_thinking', OlivOSAIChatAssassin.data.configDefault['first_thinking'])
+            )
             reply_list = get_json_message(
                 OlivOSAIChatAssassin.webTools.call_ai(
                     OlivOSAIChatAssassin.data.gData.getConfig(bot_hash), messages,
                     response_format_override={"type": "json_object"},
-                    flag_thinking_override=False
+                    flag_thinking_override=False if first_thinking is True else None
                 )
             )
             if (
-                type(reply_list) is list
+                first_thinking is True
+                and type(reply_list) is list
                 and len(reply_list) > 0
             ):
                 thinking = (
