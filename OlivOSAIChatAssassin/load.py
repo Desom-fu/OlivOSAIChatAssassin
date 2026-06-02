@@ -1,8 +1,11 @@
+import copy
 import os
 import json
 import threading
+import time
 from enum import Enum
 from typing import Dict, Optional
+from urllib.parse import quote, unquote
 
 import OlivOSAIChatAssassin
 
@@ -11,12 +14,29 @@ def load_logger(Proc):
     OlivOSAIChatAssassin.data.gProc = Proc
 
 
+def _merge_defaults(target: dict, defaults: dict) -> tuple[dict, bool]:
+    if not isinstance(target, dict):
+        return copy.deepcopy(defaults), True
+    changed = False
+    for key, value in defaults.items():
+        if key not in target:
+            target[key] = copy.deepcopy(value)
+            changed = True
+        elif isinstance(value, dict) and isinstance(target.get(key), dict):
+            _, child_changed = _merge_defaults(target[key], value)
+            if child_changed:
+                changed = True
+    return target, changed
+
+
 def load_init_after():
     OlivOSAIChatAssassin.data.gMessageHistory = {}
+    OlivOSAIChatAssassin.data.gHistoryLoaded = False
     OlivOSAIChatAssassin.data.gData = OlivOSAIChatAssassin.load.DataManager(
         config_dir=OlivOSAIChatAssassin.data.gConfigDir,
         memory_dir=OlivOSAIChatAssassin.data.gMemoryDir,
-        default_config=OlivOSAIChatAssassin.data.configDefault
+        default_config=OlivOSAIChatAssassin.data.configDefault,
+        default_memory=OlivOSAIChatAssassin.data.gMemoryDefault
     )
 
 
@@ -63,7 +83,7 @@ class DataManagerType(Enum):
 
 
 class DataManager:
-    def __init__(self, config_dir: str, memory_dir: str, default_config: dict):
+    def __init__(self, config_dir: str, memory_dir: str, default_config: dict, default_memory: Optional[dict] = None):
         """
         :param config_dir:    存放配置文件的目录（对应 gConfigDir）
         :param memory_dir:    存放记忆文件的目录（对应 gMemoryDir）
@@ -71,7 +91,8 @@ class DataManager:
         """
         self.config_dir = config_dir
         self.memory_dir = memory_dir
-        self.default_config = default_config
+        self.default_config = copy.deepcopy(default_config)
+        self.default_memory = copy.deepcopy(default_memory or {})
 
         # botHash -> 配置字典
         self.config: Dict[str, dict] = {}
@@ -133,10 +154,9 @@ class DataManager:
                 with open(target_path, 'r', encoding='utf-8') as f:
                     config = json.load(f)
 
-        # 补全缺失的默认字段
-        for key, value in self.default_config.items():
-            if key not in config:
-                config[key] = value
+        config, merged_changed = _merge_defaults(config, self.default_config)
+        if merged_changed:
+            flag_need_write = True
 
         if flag_need_write:
             target_path = specific_path
@@ -171,7 +191,7 @@ class DataManager:
             flag_need_write = True
         else:
             target_path = specific_path
-            # 默认记忆为空字典，也可自定义默认记忆内容
+            memory = copy.deepcopy(self.default_memory)
             flag_need_read = False
             flag_need_write = True
 
@@ -179,6 +199,10 @@ class DataManager:
             with self._memory_lock:
                 with open(target_path, 'r', encoding='utf-8') as f:
                     memory = json.load(f)
+
+        memory, merged_changed = _merge_defaults(memory, self.default_memory)
+        if merged_changed:
+            flag_need_write = True
 
         if flag_need_write:
             target_path = specific_path
@@ -298,3 +322,111 @@ class DataManager:
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(self.memory[bot_hash], f, ensure_ascii=False, indent=4)
             self._memory_mtime[bot_hash] = os.path.getmtime(path)
+
+
+def _build_history_queue(config):
+    keep = config.get('history_size', OlivOSAIChatAssassin.data.configDefault['history_size'])
+    max_grow = (
+        config.get('history_dynamic_size', OlivOSAIChatAssassin.data.configDefault['history_dynamic_size'])
+        if config.get('history_dynamic', OlivOSAIChatAssassin.data.configDefault['history_dynamic']) is True
+        else keep
+    )
+    return OlivOSAIChatAssassin.tools.DynamicQueue(keep=keep, max_grow=max_grow)
+
+
+def _get_history_runtime_config() -> dict:
+    if (
+        OlivOSAIChatAssassin.data.gData is not None
+        and isinstance(OlivOSAIChatAssassin.data.gData.config, dict)
+        and len(OlivOSAIChatAssassin.data.gData.config) > 0
+    ):
+        return next(iter(OlivOSAIChatAssassin.data.gData.config.values()))
+    return OlivOSAIChatAssassin.data.configDefault
+
+
+def _get_history_file_name(group_id) -> str:
+    return f'{quote(str(group_id), safe="")}.json'
+
+
+def _get_history_file_path(group_id) -> str:
+    return os.path.join(OlivOSAIChatAssassin.data.gHistoryDir, _get_history_file_name(group_id))
+
+
+def _get_group_id_from_history_file(file_name: str) -> 'str|None':
+    if not isinstance(file_name, str) or not file_name.endswith('.json'):
+        return None
+    return unquote(file_name[:-5])
+
+
+def load_history():
+    with OlivOSAIChatAssassin.data.gHistoryLock:
+        if OlivOSAIChatAssassin.data.gHistoryLoaded:
+            return
+        try:
+            os.makedirs(OlivOSAIChatAssassin.data.gHistoryDir, exist_ok=True)
+            config = _get_history_runtime_config()
+            image_expire = config.get(
+                'image_expire_time',
+                OlivOSAIChatAssassin.data.configDefault['image_expire_time']
+            )
+            now = time.time()
+            OlivOSAIChatAssassin.data.gMessageHistory = {}
+            history_file_count = 0
+            for file_name in os.listdir(OlivOSAIChatAssassin.data.gHistoryDir):
+                group_id = _get_group_id_from_history_file(file_name)
+                if group_id is None:
+                    continue
+                file_path = os.path.join(OlivOSAIChatAssassin.data.gHistoryDir, file_name)
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        messages = json.load(f)
+                    queue = _build_history_queue(config)
+                    if isinstance(messages, list):
+                        for msg in messages:
+                            if isinstance(msg, dict):
+                                msg_new = dict(msg)
+                                msg_new['message'] = OlivOSAIChatAssassin.webTools.sanitize_media_message(
+                                    msg_new.get('message', ''),
+                                    timestamp=msg_new.get('timestamp', 0),
+                                    image_expire=image_expire,
+                                    now=now
+                                )
+                                queue.append(msg_new)
+                    OlivOSAIChatAssassin.data.gMessageHistory[group_id] = queue
+                    history_file_count += 1
+                except Exception as e:
+                    OlivOSAIChatAssassin.logger.warn(f'加载历史记录[{file_name}]失败: {e}')
+            OlivOSAIChatAssassin.logger.log(f'已加载历史记录: {history_file_count} 个群')
+            OlivOSAIChatAssassin.data.gHistoryLoaded = True
+        except Exception as e:
+            OlivOSAIChatAssassin.logger.warn(f'加载历史记录失败: {e}')
+
+
+def write_history(group_id: 'str|None' = None):
+    with OlivOSAIChatAssassin.data.gHistoryLock:
+        try:
+            os.makedirs(OlivOSAIChatAssassin.data.gHistoryDir, exist_ok=True)
+            group_ids = [str(group_id)] if group_id is not None else list(OlivOSAIChatAssassin.data.gMessageHistory.keys())
+            for group_id_this in group_ids:
+                file_path = _get_history_file_path(group_id_this)
+                if group_id_this not in OlivOSAIChatAssassin.data.gMessageHistory:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                    continue
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(
+                        list(OlivOSAIChatAssassin.data.gMessageHistory[group_id_this]),
+                        f,
+                        ensure_ascii=False,
+                        indent=4
+                    )
+            if group_id is None:
+                active_files = {
+                    _get_history_file_name(group_id_this)
+                    for group_id_this in OlivOSAIChatAssassin.data.gMessageHistory
+                }
+                for file_name in os.listdir(OlivOSAIChatAssassin.data.gHistoryDir):
+                    if file_name.endswith('.json') and file_name not in active_files:
+                        os.remove(os.path.join(OlivOSAIChatAssassin.data.gHistoryDir, file_name))
+        except Exception as e:
+            OlivOSAIChatAssassin.logger.warn(f'写入历史记录失败: {e}')

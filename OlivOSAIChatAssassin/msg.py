@@ -4,12 +4,246 @@ import time
 import threading
 import re
 import os
+import hashlib
 from datetime import datetime
 from collections import deque
 from typing import Optional, Callable, Tuple
 
 import OlivOS
 import OlivOSAIChatAssassin
+
+
+FORWARD_PATTERN = re.compile(r'\[OP:forward,id=([^\]]+)\]')
+MFACE_PATTERN = re.compile(r'\[(?:CQ|OP):mface,[^\]]*(?:\[[^\]]*\])*[^\]]*\]')
+OP_IMAGE_PATTERN = re.compile(r'\[OP:image,[^\]]+\]')
+IMAGE_CODE_PATTERN = re.compile(r'\[图片：[^\]]*\]')
+
+
+def extract_tag_param(tag: str, key: str) -> 'str|None':
+    if not isinstance(tag, str):
+        return None
+    match = re.search(rf'{re.escape(key)}=([^,\]]+)', tag)
+    if match:
+        return match.group(1)
+    return None
+
+
+def guess_file_ext_from_url(url: 'str|None', default_ext: str = '.jpg') -> str:
+    if not isinstance(url, str) or len(url) <= 0:
+        return default_ext
+    clean_url = url.split('?', 1)[0]
+    _, ext = os.path.splitext(clean_url)
+    ext = ext.lower()
+    if ext in ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'):
+        return ext
+    return default_ext
+
+
+def get_mface_file_name(tag: str) -> str:
+    file_name = extract_tag_param(tag, 'file')
+    if isinstance(file_name, str) and len(file_name) > 0:
+        return file_name
+    url = extract_tag_param(tag, 'url')
+    summary = extract_tag_param(tag, 'summary') or ''
+    digest = hashlib.md5(f'{url or tag}|{summary}'.encode('utf-8')).hexdigest().upper()
+    return f'{digest}{guess_file_ext_from_url(url, default_ext=".png")}'
+
+
+def build_basic_image_cache_data(message_text: str, image_type: str = '图片', summary: 'str|None' = None) -> dict:
+    if isinstance(message_text, str):
+        if '表情包' in message_text or '梗图' in message_text:
+            image_type = '表情包'
+        elif '照片' in message_text:
+            image_type = '照片'
+    content = '用户刚发送的一张图片'
+    if isinstance(summary, str) and len(summary.strip()) > 0:
+        content = summary.strip()[:32]
+    return {
+        'content': content,
+        'intent': '用户可能希望保存、查看或再次发送这张图片',
+        'type': image_type
+    }
+
+
+def format_timestamp(timestamp) -> 'str|None':
+    if not isinstance(timestamp, (int, float)):
+        return None
+    if timestamp <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(timestamp).astimezone().replace(microsecond=0).isoformat()
+    except Exception:
+        return None
+
+
+def flatten_message_content(content) -> str:
+    if content is None:
+        return ''
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return ''.join([flatten_message_content(item) for item in content])
+    if isinstance(content, dict):
+        segment_type = content.get('type')
+        data = content.get('data')
+        if segment_type == 'text':
+            if isinstance(data, dict) and isinstance(data.get('text'), str):
+                return data.get('text', '')
+            if isinstance(content.get('text'), str):
+                return content.get('text', '')
+        if segment_type == 'image':
+            return '[图片]'
+        if segment_type in ('mface', 'face'):
+            return '[表情]'
+        if segment_type == 'reply':
+            if isinstance(data, dict) and data.get('id') is not None:
+                return f'[回复:{data.get("id")}]'
+            return '[回复]'
+        if segment_type == 'at':
+            if isinstance(data, dict) and data.get('qq') is not None:
+                return f'[OP:at,id={data.get("qq")}]'
+            return '[艾特]'
+        if segment_type == 'record':
+            return '[语音]'
+        if segment_type == 'video':
+            return '[视频]'
+        if segment_type == 'file':
+            return '[文件]'
+        if segment_type == 'forward':
+            forward_id = None
+            if isinstance(data, dict):
+                forward_id = data.get('id') or data.get('message_id')
+            if forward_id is None:
+                forward_id = content.get('id') or content.get('message_id')
+            if forward_id is not None:
+                return f'[OP:forward,id={forward_id}]'
+            return '[合并转发]'
+        for key in ('message', 'content', 'text', 'raw_message'):
+            value = content.get(key)
+            if value is not None:
+                return flatten_message_content(value)
+        if isinstance(data, dict):
+            for key in ('text', 'message', 'content'):
+                value = data.get(key)
+                if value is not None:
+                    return flatten_message_content(value)
+        return json.dumps(content, ensure_ascii=False)
+    return str(content)
+
+
+def format_forward_node(plugin_event: OlivOS.API.Event, node: dict, depth: int = 0) -> str:
+    if not isinstance(node, dict):
+        return str(node)
+    sender = node.get('sender', {})
+    sender_name = '未知用户'
+    sender_id = None
+    if isinstance(sender, dict):
+        sender_name = sender.get('name') or sender.get('nickname') or sender_name
+        sender_id = sender.get('id') or sender.get('user_id')
+    sender_name = node.get('nickname') or node.get('name') or sender_name
+    sender_id = node.get('user_id') or node.get('sender_id') or sender_id
+    time_text = format_timestamp(node.get('time')) or format_timestamp(node.get('sender_time')) or '未知时间'
+    content = None
+    for key in ('message', 'content', 'raw_message', 'text'):
+        if key in node:
+            content = node.get(key)
+            break
+    message = flatten_message_content(content)
+    if message:
+        message = expand_forward_messages(plugin_event, message, depth=depth + 1)
+        message = clean_media_tags(message)
+    else:
+        message = '[空消息]'
+    sender_text = f'[{sender_name}]'
+    if sender_id is not None:
+        sender_text = f'[{sender_name}]({sender_id})'
+    return f'{time_text} {sender_text} 说: "{message}"'
+
+
+def render_forward_message(plugin_event: OlivOS.API.Event, forward_message_id, depth: int = 0) -> str:
+    if depth > 4:
+        return f'[合并转发:{forward_message_id}]'
+    try:
+        res = plugin_event.get_forward_msg(forward_message_id)
+        if not isinstance(res, dict):
+            return f'[合并转发:{forward_message_id}]'
+        if not res.get('active'):
+            return f'[合并转发:{forward_message_id}]'
+        data = res.get('data', {})
+        if not isinstance(data, dict):
+            return f'[合并转发:{forward_message_id}]'
+        messages = data.get('messages', [])
+        if not isinstance(messages, list) or len(messages) <= 0:
+            return f'[合并转发:{forward_message_id} 空]'
+        lines = [format_forward_node(plugin_event, node, depth=depth) for node in messages]
+        return '[合并转发开始]\n' + '\n'.join(lines) + '\n[合并转发结束]'
+    except Exception as e:
+        OlivOSAIChatAssassin.logger.warn(f'FORWARD FATAL: {forward_message_id} - {e}')
+        return f'[合并转发:{forward_message_id}]'
+
+
+def expand_forward_messages(plugin_event: OlivOS.API.Event, message: str, depth: int = 0) -> str:
+    if not isinstance(message, str):
+        return flatten_message_content(message)
+    if plugin_event is None or '[OP:forward,' not in message:
+        return message
+    if depth > 4:
+        return FORWARD_PATTERN.sub('[合并转发]', message)
+
+    def _forward_replace(match):
+        return render_forward_message(plugin_event, match.group(1), depth=depth)
+
+    return FORWARD_PATTERN.sub(_forward_replace, message)
+
+
+def clean_media_tags(message: str) -> str:
+    if not isinstance(message, str):
+        return message
+    res = OP_IMAGE_PATTERN.sub('[图片]', message)
+
+    def _mface_clean(match):
+        summary = extract_tag_param(match.group(0), 'summary')
+        if isinstance(summary, str) and len(summary) > 0:
+            return summary
+        return '[表情]'
+
+    res = MFACE_PATTERN.sub(_mface_clean, res)
+    res = re.sub(r'\[OP:record.+?\]', '[语音]', res)
+    res = re.sub(r'\[OP:video.+?\]', '[视频]', res)
+    res = re.sub(r'\[OP:json.+?"prompt":"(.+?)".*?\]', r'[卡片：\1]', res)
+    res = re.sub(r'\[OP:json.+?\]', '[卡片]', res)
+    return res
+
+
+def strip_media_for_search(message: str) -> str:
+    if not isinstance(message, str):
+        return ''
+    res = IMAGE_CODE_PATTERN.sub(' ', message)
+    res = OP_IMAGE_PATTERN.sub(' ', res)
+    res = MFACE_PATTERN.sub(' ', res)
+    res = re.sub(r'\[图片\]', ' ', res)
+    res = re.sub(r'\[表情\]', ' ', res)
+    res = re.sub(r'\[语音[^\]]*\]', ' ', res)
+    res = re.sub(r'\[视频[^\]]*\]', ' ', res)
+    res = re.sub(r'\[卡片[^\]]*\]', ' ', res)
+    res = re.sub(r'\s+', ' ', res)
+    return res.strip()
+
+
+def extract_image_file_names(message: str) -> list[str]:
+    if not isinstance(message, str):
+        return []
+    file_names = []
+    for match in OP_IMAGE_PATTERN.finditer(message):
+        params = OlivOSAIChatAssassin.tools.opcode_parse_params('image', match.group(0))
+        file_name = params.get('file')
+        if isinstance(file_name, str) and file_name and file_name not in file_names:
+            file_names.append(file_name)
+    for match in MFACE_PATTERN.finditer(message):
+        file_name = get_mface_file_name(match.group(0))
+        if file_name not in file_names:
+            file_names.append(file_name)
+    return file_names
 
 
 def unity_group_message(plugin_event: OlivOS.API.Event, Proc):
@@ -39,6 +273,7 @@ def unity_group_message_router(plugin_event: OlivOS.API.Event, Proc):
 
     # 仅在文件变化时重新加载配置和记忆（避免高频磁盘 I/O）
     OlivOSAIChatAssassin.data.gData.reload(bot_hash)
+    OlivOSAIChatAssassin.load.load_history()
     if not OlivOSAIChatAssassin.data.gData.getConfig(bot_hash):
         return
     # 检查是否在启用群组列表中
@@ -52,7 +287,7 @@ def unity_group_message_router(plugin_event: OlivOS.API.Event, Proc):
         return
     # 忽略前缀消息
     message = plugin_event.data.message
-    message = msg_trans(message, group_id, bot_hash=bot_hash)
+    message = msg_trans(message, group_id, plugin_event=plugin_event, bot_hash=bot_hash)
     message = msg_wash(message)
     if should_ignore(message, bot_hash=bot_hash):
         OlivOSAIChatAssassin.logger.log('IGNORE')
@@ -110,13 +345,32 @@ def add_message_to_history(
 ):
     if group_id not in OlivOSAIChatAssassin.data.gMessageHistory:
         return
-    timestamp = time.time()
-    message_new = message
-    max_len = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
+    config = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash)
+    image_expire = config.get(
+        'image_expire_time',
+        OlivOSAIChatAssassin.data.configDefault['image_expire_time']
+    )
+    now = time.time()
+    for msg_history in OlivOSAIChatAssassin.data.gMessageHistory[group_id]:
+        if isinstance(msg_history, dict):
+            msg_history['message'] = OlivOSAIChatAssassin.webTools.sanitize_media_message(
+                msg_history.get('message', ''),
+                timestamp=msg_history.get('timestamp', 0),
+                image_expire=image_expire,
+                now=now
+            )
+    timestamp = now
+    message_new = OlivOSAIChatAssassin.webTools.sanitize_media_message(
+        message,
+        timestamp=timestamp,
+        image_expire=image_expire,
+        now=now
+    )
+    max_len = config.get(
         'max_message_length',
         OlivOSAIChatAssassin.data.configDefault['max_message_length']
     )
-    if len(message_new) > max_len:
+    if len(message_new) > max_len and '[OP:image,' not in message_new and ':mface,' not in message_new and '[合并转发开始]' not in message_new:
         message_new = message_new[:max_len] + '...'
     msg_entry = {
         'timestamp': timestamp,
@@ -128,6 +382,7 @@ def add_message_to_history(
     if message_id is not None:
         msg_entry['message_id'] = str(message_id)
     OlivOSAIChatAssassin.data.gMessageHistory[group_id].append(msg_entry)
+    OlivOSAIChatAssassin.load.write_history(group_id)
 
 
 def should_reply(group_id, message, plugin_event, bot_hash: str):
@@ -338,11 +593,14 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
             thisMemoryM = OlivOSAIChatAssassin.data.gStaticKnowledge
             rate_this = 0.15
         for j in history:
-            target_str = j.get('message', '')
+            target_msg = strip_media_for_search(j.get('message', ''))
+            if len(target_msg) <= 0:
+                continue
+            target_str = target_msg
             if j.get('nickname', '') is None:
-                target_str = f"我()：{j.get('message', '')}"
+                target_str = f"我()：{target_msg}"
             else:
-                target_str = f"{j.get('nickname', '')}({j.get('user_id', '')})：{j.get('message', '')}"
+                target_str = f"{j.get('nickname', '')}({j.get('user_id', '')})：{target_msg}"
             thisMemoryG_patch.update(
                 OlivOSAIChatAssassin.tools.peak_up_recommendMatch(
                     target=target_str,
@@ -399,6 +657,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                 flagHit = False
                 flagHit_str = None
                 for j in history:
+                    message_clean = strip_media_for_search(j.get('message', '')).lower()
                     if k == j.get('user_id', None):
                         flagHit = True
                         flagHit_str = k
@@ -408,13 +667,13 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                         and len(v) >= 1
                     ):
                         if type(v[0]) is str:
-                            if v[0] in j.get('message', '').lower():
+                            if v[0] in message_clean:
                                 flagHit = True
                                 flagHit_str = v[0]
                                 break
                         elif type(v[0]) is list:
                             for n in v[0]:
-                                if n in j.get('message', '').lower():
+                                if n in message_clean:
                                     flagHit = True
                                     flagHit_str = n
                                     break
@@ -570,11 +829,16 @@ def get_ai_context(
     )
     # 添加最近的历史消息，限制数量
     max_history_this = len(history)
+    image_expire = lConfig.get(
+        'image_expire_time',
+        OlivOSAIChatAssassin.data.configDefault['image_expire_time']
+    ) if lConfig else OlivOSAIChatAssassin.data.configDefault['image_expire_time']
+    now = time.time()
     if flagMerge:
         chat_content = '\n'.join([
-            f'{entry["time"]} [{entry["nickname"]}]({entry["user_id"]}) 说: "{entry["message"]}"'
+            f'{entry["time"]} [{entry["nickname"]}]({entry["user_id"]}) 说: "{clean_media_tags(OlivOSAIChatAssassin.webTools.sanitize_media_message(entry["message"], timestamp=entry.get("timestamp", 0), image_expire=image_expire, now=now))}"'
             if entry['nickname'] is not None
-            else f'{entry["time"]} [我]() 说: "{entry["message"]}"'
+            else f'{entry["time"]} [我]() 说: "{clean_media_tags(OlivOSAIChatAssassin.webTools.sanitize_media_message(entry["message"], timestamp=entry.get("timestamp", 0), image_expire=image_expire, now=now))}"'
             for entry in list(history)[-max_history_this:]
         ])
         messages.append(
@@ -597,9 +861,17 @@ def get_ai_context(
             else:
                 entry_this = {}
                 entry_this.update(entry)
-                for handler in handler_list:
+                entry_this['message'] = clean_media_tags(
+                    OlivOSAIChatAssassin.webTools.sanitize_media_message(
+                        entry_this.get('message', ''),
+                        timestamp=entry_this.get('timestamp', 0),
+                        image_expire=image_expire,
+                        now=now
+                    )
+                )
+                for handler in handler_list or []:
                     entry_this, patch = handler(entry_this, patch)
-                if count == max_history_this:
+                if count == max_history_this and patch is not None:
                     entry_this.update(patch)
                 messages.append(
                     {
@@ -619,8 +891,9 @@ def img_handler(entry_data: dict, patch_data: dict[str, dict]) -> Tuple[dict, di
         and '图片缓存' in patch_data
         and type(patch_data['图片缓存']) is dict
     ):
+        image_file_names = set(extract_image_file_names(entry_data.get('message', '')))
         for i in list(patch_data.get('图片缓存', {}).keys()):
-            if OlivOSAIChatAssassin.tools.imgcode_format(patch_data['图片缓存'][i]) in entry_data['message']:
+            if i in image_file_names or OlivOSAIChatAssassin.tools.imgcode_format(patch_data['图片缓存'][i]) in entry_data['message']:
                 entry_res.setdefault('当前图片缓存', {})
                 entry_res['当前图片缓存'][i] = patch_data['图片缓存'][i]
                 patch_res['图片缓存'].pop(i)
@@ -736,45 +1009,45 @@ def reply_trans(msg: list):
     return res
 
 
-def msg_trans(msg: str, group_id: str, *, bot_hash: str):
+def msg_trans(msg: str, group_id: str, *, plugin_event: 'OlivOS.API.Event|None' = None, bot_hash: str):
     res = msg
 
-    def process_image(match: re.Match) -> str:
-        original = match.group(0)
-        res = original
-        params = OlivOSAIChatAssassin.tools.opcode_parse_params('image', original)
+    if plugin_event is not None:
+        res = expand_forward_messages(plugin_event, res)
+
+    if '[OP:image' not in res and ':mface,' not in res:
+        return res
+
+    def resolve_media_cache(file_name: str, image_url: 'str|None', message_text: str, image_type: str, summary: 'str|None' = None):
         res_data = None
-        examples_reply = {
-            "content": "内容描述",
-            "intent": "意图描述",
-            "type": "类型描述"
-        }
-        if (
-            'file' in params
-            and type(params['file']) is str
-            and 'url' in params
-            and type(params['url']) is str
+        global_image_cache = OlivOSAIChatAssassin.data.gData.getMemory(bot_hash).get('全局', {}).get('图片缓存', {})
+        if isinstance(global_image_cache, dict):
+            cache_data = global_image_cache.get(file_name)
+            if isinstance(cache_data, dict):
+                res_data = cache_data
+        if res_data is None and image_url and OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
+            'ocr_api',
+            OlivOSAIChatAssassin.data.configDefault['ocr_api']
+        ).get(
+            'enable',
+            OlivOSAIChatAssassin.data.configDefault['ocr_api']['enable']
         ):
-            if params['file'] in OlivOSAIChatAssassin.data.gData.getMemory(bot_hash).get('全局', {}).get('图片缓存', {}):
-                res_data = (
-                    OlivOSAIChatAssassin.data.gData
-                    .getMemory(bot_hash)
-                    .get('全局', {})
-                    .get('图片缓存', {})
-                    .get(params['file'])
-                )
-            else:
-                image_url = params['url']
-                if OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get('ocr_api', {}).get('mode', 'base64'):
-                    image_url = OlivOSAIChatAssassin.webTools.download_image_to_base64(
-                        url=image_url,
-                        save_dir=OlivOSAIChatAssassin.data.gImageDir,
-                        filename=params['file']
-                    )
-                prompt = f'''
+            image_input = image_url
+            if OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get('ocr_api', {}).get('mode', 'base64') == 'base64':
+                image_input = OlivOSAIChatAssassin.webTools.download_image_to_base64(
+                    url=image_url,
+                    save_dir=OlivOSAIChatAssassin.data.gImageDir,
+                    filename=file_name
+                ) or image_url
+            examples_reply = {
+                'content': '内容描述',
+                'intent': '意图描述',
+                'type': '类型描述'
+            }
+            prompt = f'''
 # 当前任务
 ## 识别图片并分析相关信息，以Json格式输出
-- 用户是一个盲人，正在群聊中聊天，请识别图片并分析相关信息
+- 用户正在群聊中聊天，请识别图片并分析相关信息
 - 尽量精确的描述这个图片的内容，32字以内，单行内，输出到 "content" 键的值中
 - 如果有角色，识别的内容也应该尽量识别角色
 - 为用户分析这张图片的意图，32字以内，单行内，输出到 "intent" 键的值中
@@ -783,81 +1056,68 @@ def msg_trans(msg: str, group_id: str, *, bot_hash: str):
 # 参考输出，以严格的Json格式输出
 {json.dumps(examples_reply, ensure_ascii=False)}
 '''
-                ocr_res = {}
-                try:
-                    ocr_res_data = OlivOSAIChatAssassin.webTools.call_ai_ocr(
-                        OlivOSAIChatAssassin.data.gData.getConfig(bot_hash),
-                        prompt=prompt,
-                        image_url=image_url
-                    )
-                    if type(ocr_res_data) is str:
-                        ocr_res = json.loads(ocr_res_data)
-                except Exception as e:
-                    OlivOSAIChatAssassin.logger.warn(f'CALL AI OCR - ERR: {e}')
-                flag_ocr_checked = True
-                if type(ocr_res) is dict:
-                    for i in examples_reply:
-                        if not (
-                            i in ocr_res
-                            and type(ocr_res[i]) is type(examples_reply[i])
-                        ):
-                            flag_ocr_checked = False
-                            break
-                else:
-                    flag_ocr_checked = False
-                if flag_ocr_checked:
-                    OlivOSAIChatAssassin.data.gData.getMemory(bot_hash).setdefault('全局', {})
-                    OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局'].setdefault('图片缓存', {})
-                    OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']['图片缓存'][params['file']] = ocr_res
-                    res_data = ocr_res
-                    OlivOSAIChatAssassin.load.write_memory(bot_hash=bot_hash)
-        flag_res_data_checked = False
-        if type(res_data) is dict:
-            flag_res_data_checked = True
-            for i in examples_reply:
-                if not (
-                    i in res_data
-                    and type(res_data[i]) is type(examples_reply[i])
-                ):
-                    flag_res_data_checked = False
-                    break
-        if flag_res_data_checked:
-            if (
-                'file' in params
-                and type(params['file']) is str
-            ):
-                OlivOSAIChatAssassin.data.gImageCache.setdefault(
-                    group_id,
-                    deque(
-                        maxlen=OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
-                            'ocr_api',
-                            OlivOSAIChatAssassin.data.configDefault['ocr_api']
-                        ).get(
-                            'queue_size',
-                            OlivOSAIChatAssassin.data.configDefault['ocr_api']['queue_size']
-                        )
-                    )
+            try:
+                ocr_res_data = OlivOSAIChatAssassin.webTools.call_ai_ocr(
+                    OlivOSAIChatAssassin.data.gData.getConfig(bot_hash),
+                    prompt=prompt,
+                    image_url=image_input
                 )
-                OlivOSAIChatAssassin.data.gImageCache[group_id].append((params['file'], res_data))
-            res = OlivOSAIChatAssassin.tools.imgcode_format(res_data)
-        return res
-    if OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
-        'ocr_api',
-        OlivOSAIChatAssassin.data.configDefault['ocr_api']
-    ).get(
-        'enable',
-        OlivOSAIChatAssassin.data.configDefault['ocr_api']['enable']
-    ):
-        res = re.sub(r'\[OP:image.+?\]', process_image, res)
+                if isinstance(ocr_res_data, str):
+                    ocr_res = json.loads(ocr_res_data)
+                    if isinstance(ocr_res, dict) and all(isinstance(ocr_res.get(key), str) for key in examples_reply):
+                        OlivOSAIChatAssassin.data.gData.getMemory(bot_hash).setdefault('全局', {})
+                        OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局'].setdefault('图片缓存', {})
+                        OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']['图片缓存'][file_name] = ocr_res
+                        OlivOSAIChatAssassin.load.write_memory(bot_hash=bot_hash)
+                        res_data = ocr_res
+            except Exception as e:
+                OlivOSAIChatAssassin.logger.warn(f'CALL AI OCR - ERR: {e}')
+        if res_data is None:
+            res_data = build_basic_image_cache_data(message_text, image_type=image_type, summary=summary)
+        OlivOSAIChatAssassin.data.gImageCache.setdefault(
+            group_id,
+            deque(
+                maxlen=OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
+                    'ocr_api',
+                    OlivOSAIChatAssassin.data.configDefault['ocr_api']
+                ).get(
+                    'queue_size',
+                    OlivOSAIChatAssassin.data.configDefault['ocr_api']['queue_size']
+                )
+            )
+        )
+        OlivOSAIChatAssassin.data.gImageCache[group_id].append((file_name, res_data))
+        return OlivOSAIChatAssassin.tools.imgcode_format(res_data)
+
+    def process_image(match: re.Match) -> str:
+        original = match.group(0)
+        params = OlivOSAIChatAssassin.tools.opcode_parse_params('image', original)
+        file_name = params.get('file')
+        if not isinstance(file_name, str) or len(file_name) <= 0:
+            return OlivOSAIChatAssassin.tools.imgcode_format()
+        return resolve_media_cache(
+            file_name,
+            params.get('url'),
+            original,
+            '图片'
+        )
+
+    def process_mface(match: re.Match) -> str:
+        original = match.group(0)
+        file_name = get_mface_file_name(original)
+        summary = extract_tag_param(original, 'summary')
+        return resolve_media_cache(
+            file_name,
+            extract_tag_param(original, 'url'),
+            summary or original,
+            '表情包',
+            summary=summary
+        )
+
+    res = OP_IMAGE_PATTERN.sub(process_image, res)
+    res = MFACE_PATTERN.sub(process_mface, res)
     return res
 
 
 def msg_wash(msg: str):
-    res = msg
-    res = re.sub(r'\[OP:image.+?\]', OlivOSAIChatAssassin.tools.imgcode_format(), res)
-    res = re.sub(r'\[OP:record.+?\]', r'[语音：未识别成功，不应回复；意图：不明；类型：不明]', res)
-    res = re.sub(r'\[OP:video.+?\]', r'[视频：未识别成功，不应回复；意图：不明；类型：不明]', res)
-    res = re.sub(r'\[OP:json.+?"prompt":"(.+?)".*?\]', r'[卡片：\1]', res)
-    res = re.sub(r'\[OP:json.+?\]', r'[卡片：未识别成功，不应回复；意图：不明；类型：不明]', res)
-    res = re.sub(r'(\[)(OP|CQ)(:.+?),url=http.+,{0,1}(.*?\])', r'\1OP\3\4', res)
-    return res
+    return clean_media_tags(msg)

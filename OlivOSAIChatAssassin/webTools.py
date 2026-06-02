@@ -2,9 +2,37 @@ import time
 import requests
 import base64
 import os
+import re
 from pathlib import Path
 
 import OlivOSAIChatAssassin
+
+
+OP_IMAGE_PATTERN = re.compile(r'\[OP:image,[^\]]+\]')
+MFACE_PATTERN = re.compile(r'\[(?:CQ|OP):mface,[^\]]*(?:\[[^\]]*\])*[^\]]*\]')
+
+
+def _mface_placeholder(tag: str) -> str:
+    summary_match = re.search(r'summary=([^,\]]+)', tag)
+    if summary_match:
+        return summary_match.group(1)
+    return '[表情]'
+
+
+def sanitize_media_message(message: str, timestamp: 'int|float|None' = None, image_expire: 'int|float' = 0, now: 'int|float|None' = None) -> str:
+    if not isinstance(message, str):
+        return message
+    if '[OP:image,' not in message and ':mface,' not in message:
+        return message
+    if now is None:
+        now = time.time()
+    is_expired = False
+    if isinstance(timestamp, (int, float)) and timestamp > 0 and image_expire > 0:
+        is_expired = now - timestamp > image_expire
+    if not is_expired:
+        return message
+    message = OP_IMAGE_PATTERN.sub('[图片]', message)
+    return MFACE_PATTERN.sub(lambda match: _mface_placeholder(match.group(0)), message)
 
 
 def call_ai(

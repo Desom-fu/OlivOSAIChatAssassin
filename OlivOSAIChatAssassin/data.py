@@ -31,6 +31,10 @@ gMemoryDefault = {
 }
 gMemoryDefaultStr = "择机加入对话"
 
+gHistoryDir = './plugin/data/OlivOSAIChatAssassin/history'
+gHistoryLock = threading.Lock()
+gHistoryLoaded: bool = False
+
 gStaticKnowledgeDir = './plugin/data/OlivOSAIChatAssassin/Knowledge'
 gStaticKnowledge = {}
 
@@ -67,6 +71,7 @@ configDefault = {
     'mention_reply': True,
     'ignore_prefixes': [],
     'max_message_length': 2048,
+    'image_expire_time': 1800,
     'ocr_api': {
         'api_key': '',
         'api_base': 'https://api.siliconflow.cn/v1/',

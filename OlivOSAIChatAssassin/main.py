@@ -14,6 +14,7 @@ class Event:
         OlivOSAIChatAssassin.load.load_logger(Proc)
         OlivOSAIChatAssassin.load.load_bot(bot_hash_list)
         OlivOSAIChatAssassin.load.load_staticKnowledge()
+        OlivOSAIChatAssassin.load.load_history()
 
     def private_message(plugin_event, Proc):
         # 私聊消息事件入口
