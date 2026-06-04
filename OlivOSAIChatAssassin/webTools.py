@@ -35,6 +35,34 @@ def sanitize_media_message(message: str, timestamp: 'int|float|None' = None, ima
     return MFACE_PATTERN.sub(lambda match: _mface_placeholder(match.group(0)), message)
 
 
+def get_intent_ai_config(lConfig: dict) -> dict:
+    if type(lConfig) is not dict:
+        return lConfig
+    intent_api = lConfig.get(
+        'intent_api',
+        OlivOSAIChatAssassin.data.configDefault.get('intent_api', {})
+    )
+    if (
+        type(intent_api) is not dict
+        or intent_api.get('enable', False) is not True
+    ):
+        return lConfig
+    res = dict(lConfig)
+    api_key = intent_api.get('api_key', intent_api.get('token', ''))
+    api_base = intent_api.get('api_base', intent_api.get('url', ''))
+    model = intent_api.get('model', '')
+    if type(api_key) is str and api_key:
+        res['api_key'] = api_key
+    if type(api_base) is str and api_base:
+        res['api_base'] = api_base.rstrip('/')
+    if type(model) is str and model:
+        res['model'] = model
+    for key in ('max_tokens', 'temperature', 'thinking', 'reasoning_effort'):
+        if key in intent_api:
+            res[key] = intent_api[key]
+    return res
+
+
 def call_ai(
     lConfig,
     messages,

@@ -55,6 +55,14 @@ configDefault = {
     'reasoning_effort': 'max',
     'first_thinking': False,
     'first_thinking_cooldown': 60,
+    'intent_api': {
+        'enable': False,
+        'api_key': '',
+        'api_base': 'https://api.siliconflow.cn/v1',
+        'model': 'Qwen/Qwen2.5-7B-Instruct',
+        'max_tokens': 16,
+        'temperature': 0.0
+    },
     'personality': '你是一个伪装成人类的自豪的新锐AI，你择机加入聊天，避免过多尬聊。别让他们发现你的真实身份！！！',
     'record_knowledge': True,
     'search_knowledge_deepin': 1,

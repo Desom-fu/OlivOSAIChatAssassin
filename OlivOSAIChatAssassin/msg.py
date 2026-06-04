@@ -728,10 +728,27 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
 - {json.dumps(thisMemoryC, ensure_ascii=False)}
 
 # 当前任务
-## 判断是否要回复，根据判断结果输出内容
-- 如果判断不回复，则输出 SKIP
-- 如果判断要回复，则输出 NEXT
-- 除此以外，不要尝试输出任何东西
+## 你是一个二分类器，只判断最新一条群消息是否应该交给正式回复模型
+- 你的任务不是写回复，不是续写，不是抽取资料，不是解释原因
+- 只能输出一个JSON对象：{{"d":"NEXT"}} 或 {{"d":"SKIP"}}
+- d = NEXT 表示应该交给正式回复模型
+- d = SKIP 表示不应该交给正式回复模型
+
+## 必须输出 NEXT 的情况
+- 最新消息 @ 你、回复你、称呼你的名字/昵称、问候你、向你提问、要求你做事
+- 最新消息明显是在邀请你接话，或者你不确定是否在找你
+- 例如“小芙下午好啊”“小芙在吗”“你怎么看”“帮我看看”都输出 {{"d":"NEXT"}}
+
+## 可以输出 SKIP 的情况
+- 最新消息只是其他群友之间的闲聊，且没有指向你
+- 最新消息只是表情、语气词、无明确对象的短句，且你没有合适接话点
+
+## 输出要求
+- 不要输出历史内容
+- 不要输出知识库内容
+- 不要输出正式回复
+- 不要输出解释
+- 只能输出 {{"d":"NEXT"}} 或 {{"d":"SKIP"}}
 '''
     # 格式化历史为OpenAI消息格式
     history_size_max_print = (
@@ -754,6 +771,12 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
     )
     messages_first_think = get_ai_context(
         OlivOSAIChatAssassin.data.gData.getConfig(bot_hash), history, content_first_think
+    )
+    messages_first_think.append(
+        {
+            "role": "user",
+            "content": '根据上一条群消息完成二分类，只输出 {"d":"NEXT"} 或 {"d":"SKIP"}。如果上一条消息在称呼、问候、询问或要求你，输出 {"d":"NEXT"}。'
+        }
     )
     # 调用 API
     reply_list = None
@@ -778,16 +801,30 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                 and OlivOSAIChatAssassin.tools.get_think(bot_hash, group_id)
             ):
                 flag_need_think = False
-                first_thinking_res = OlivOSAIChatAssassin.webTools.call_ai(
-                    OlivOSAIChatAssassin.data.gData.getConfig(bot_hash), messages_first_think,
-                    flag_thinking_override=False
+                intent_config = OlivOSAIChatAssassin.webTools.get_intent_ai_config(
+                    OlivOSAIChatAssassin.data.gData.getConfig(bot_hash)
                 )
-                first_thinking_str = str(first_thinking_res).upper()
-                if 'NEXT' in first_thinking_str:
+                first_thinking_res = OlivOSAIChatAssassin.webTools.call_ai(
+                    intent_config, messages_first_think,
+                    flag_thinking_override=False,
+                    response_format_override={"type": "json_object"}
+                )
+                OlivOSAIChatAssassin.logger.log(f'FIRST THINK RES - {first_thinking_res}')
+                first_thinking_str = ''
+                try:
+                    first_thinking_data = json.loads(first_thinking_res)
+                    if type(first_thinking_data) is dict:
+                        first_thinking_str = str(first_thinking_data.get('d', '')).upper()
+                except Exception:
+                    first_thinking_str = str(first_thinking_res).strip().upper()
+                if first_thinking_str.startswith('NEXT'):
                     flag_need_think = True
-                elif 'SKIP' in first_thinking_str:
+                elif first_thinking_str.startswith('SKIP'):
                     flag_need_think = False
                     reply_list = []
+                else:
+                    OlivOSAIChatAssassin.logger.warn(f'FIRST THINK DATA ERR: {first_thinking_res}')
+                    flag_need_think = True
                 if flag_need_think:
                     OlivOSAIChatAssassin.logger.log('FIRST THINK PASS')
                 else:
