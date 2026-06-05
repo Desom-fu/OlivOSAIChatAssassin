@@ -680,14 +680,18 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                 if flagHit:
                     OlivOSAIChatAssassin.logger.log(f'PEAK UP - [{key_gMemory}] {flagHit_str}')
                     thisMemoryG[key_gMemory_const][k] = v
-    thisMemory = {
-        '全局': thisMemoryG,
-        group_id: (
-            OlivOSAIChatAssassin.data.gData
-            .getMemory(bot_hash)
-            .get(group_id, OlivOSAIChatAssassin.data.gMemoryDefaultStr)
-        )
+    thisGroupMemory = (
+        OlivOSAIChatAssassin.data.gData
+        .getMemory(bot_hash)
+        .get(group_id, OlivOSAIChatAssassin.data.gMemoryDefaultStr)
+    )
+    thisGroupMemoryDict = {
+        group_id: thisGroupMemory
     }
+    thisMemory = {
+        '全局': thisMemoryG
+    }
+    thisMemory.update(thisGroupMemoryDict)
     if not OlivOSAIChatAssassin.data.gGroupLock[group_id].slack():
         OlivOSAIChatAssassin.logger.log(
             f'NEXT - {time.perf_counter() - total_start:.2f}'
@@ -724,6 +728,10 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
 {json.dumps(examples_reply, ensure_ascii=False)}
 '''
     content_first_think = f'''{contentDefault}
+# 信息
+- 最新的消息中附带当前的记忆信息
+- 越新的消息越重要
+
 # 固定记忆
 - {json.dumps(thisMemoryC, ensure_ascii=False)}
 
@@ -769,8 +777,10 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
         patch=messages_patch,
         handler_list=[img_handler]
     )
+    messages_first_think_patch = {'当前记忆': thisMemory}
     messages_first_think = get_ai_context(
-        OlivOSAIChatAssassin.data.gData.getConfig(bot_hash), history, content_first_think
+        OlivOSAIChatAssassin.data.gData.getConfig(bot_hash), history, content_first_think,
+        patch=messages_first_think_patch
     )
     messages_first_think.append(
         {
@@ -826,9 +836,9 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                     OlivOSAIChatAssassin.logger.warn(f'FIRST THINK DATA ERR: {first_thinking_res}')
                     flag_need_think = True
                 if flag_need_think:
-                    OlivOSAIChatAssassin.logger.log('FIRST THINK PASS')
+                    OlivOSAIChatAssassin.logger.log(f"FIRST THINK - PASS - {first_thinking_res}")
                 else:
-                    OlivOSAIChatAssassin.logger.log('FIRST THINK SKIP')
+                    OlivOSAIChatAssassin.logger.log(f"FIRST THINK - SKIP - {first_thinking_res}")
                     reply_list = []
             if flag_need_think:
                 reply_list = get_json_message(
