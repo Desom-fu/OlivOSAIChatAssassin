@@ -110,15 +110,18 @@ def call_ai(
         payload.update({
             'response_format': response_format_override
         })
-    OlivOSAIChatAssassin.logger.log("CALL AI - START")
+    OlivOSAIChatAssassin.logger.log(f"CALL AI - START [{model} @ {api_base}, max_tokens={max_tokens}]")
     start = time.perf_counter()
     response = requests.post(url, headers=headers, json=payload, timeout=30)
     end = time.perf_counter()
     OlivOSAIChatAssassin.logger.log(f"CALL AI - DONE {(end - start):.2f} s")
     if response.status_code == 200:
         result: dict = response.json()
+        choices_data = OlivOSAIChatAssassin.tools.get_copy_data(result.get('choices', {}))
+        if type(choices_data) is list and len(choices_data) > 0 and type(choices_data[0]) is dict:
+            OlivOSAIChatAssassin.logger.log(f"CALL AI - FINISH - {choices_data[0].get('finish_reason', 'unknown')}")
         res = result['choices'][0]['message']['content'].strip()
-        log_reasoning_content(OlivOSAIChatAssassin.tools.get_copy_data(result.get('choices', {})))
+        log_reasoning_content(choices_data)
         log_usage(OlivOSAIChatAssassin.tools.get_copy_data(result.get('usage', {})))
     else:
         OlivOSAIChatAssassin.logger.warn(f'API ERR: {response.status_code} {response.text}')

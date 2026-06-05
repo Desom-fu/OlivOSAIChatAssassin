@@ -777,6 +777,12 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
         patch=messages_patch,
         handler_list=[img_handler]
     )
+    messages.append(
+        {
+            "role": "user",
+            "content": '根据上一条群聊消息决定是否回复，只输出严格JSON对象。要回复时输出 {"r":["回复内容"]}；不回复时输出 {"r":[]}。不要输出解释或其它文本。'
+        }
+    )
     messages_first_think_patch = {'当前记忆': thisMemory}
     messages_first_think = get_ai_context(
         OlivOSAIChatAssassin.data.gData.getConfig(bot_hash), history, content_first_think,
@@ -794,6 +800,8 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
     retry_count = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
         "retry_count", OlivOSAIChatAssassin.data.configDefault["retry_count"]
     )
+    first_thinking_done = False
+    first_thinking_pass = True
     try:
         while (
             reply_list is None
@@ -807,9 +815,14 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
             )
             flag_need_think = True
             if (
+                first_thinking_done is True
+            ):
+                flag_need_think = first_thinking_pass
+            elif (
                 first_thinking is True
                 and OlivOSAIChatAssassin.tools.get_think(bot_hash, group_id)
             ):
+                first_thinking_done = True
                 flag_need_think = False
                 intent_config = OlivOSAIChatAssassin.webTools.get_intent_ai_config(
                     OlivOSAIChatAssassin.data.gData.getConfig(bot_hash)
@@ -835,6 +848,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                 else:
                     OlivOSAIChatAssassin.logger.warn(f'FIRST THINK DATA ERR: {first_thinking_res}')
                     flag_need_think = True
+                first_thinking_pass = flag_need_think
                 if flag_need_think:
                     OlivOSAIChatAssassin.logger.log(f"FIRST THINK - PASS - {first_thinking_res}")
                 else:
