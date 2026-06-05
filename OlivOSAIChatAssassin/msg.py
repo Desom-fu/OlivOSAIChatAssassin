@@ -428,6 +428,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
     mention_str = f'[OP:at,id={self_id}]'
     personality = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get('personality', '')
     record_knowledge = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get('record_knowledge', True)
+    now_text = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     contentDefault = f'''
 # 规则
 - 你是一个人类，这是你日常水群的群聊，你会根据你的人格设定自行决定要不要参与群聊对话
@@ -441,6 +442,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
 # 已知信息
 - 你的QQ号是：{self_id}，所以你被@时是：{mention_str}
 - 本群群号是：{group_id}，
+- 当前本地时间是：{now_text}
 - 最后一条消息总是最新的，时间可以视为当前本地时间
 '''
 
