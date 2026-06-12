@@ -83,6 +83,8 @@ configDefault = {
     'ignore_prefixes': [],
     'max_message_length': 2048,
     'image_expire_time': 1800,
+    'intent_image_cache_size': 10,
+    'image_cleanup_non_emoji_time': 86400,
     'ocr_api': {
         'api_key': '',
         'api_base': 'https://api.siliconflow.cn/v1',

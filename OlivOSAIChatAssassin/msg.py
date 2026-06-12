@@ -740,25 +740,34 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
 # 当前任务
 ## 你是一个二分类器，只判断最新一条群消息是否应该交给正式回复模型
 - 你的任务不是写回复，不是续写，不是抽取资料，不是解释原因
-- 只能输出一个JSON对象：{{"d":"NEXT"}} 或 {{"d":"SKIP"}}
+- 只能输出一个JSON对象：{{"d":"NEXT","i":"图片内容或意图关键词或空字符串"}} 或 {{"d":"SKIP","i":""}}
 - d = NEXT 表示应该交给正式回复模型
 - d = SKIP 表示不应该交给正式回复模型
+- i 表示如果这次适合发图片，则填写你想要的图片内容或意图关键词；如果不需要发图片则为空字符串
+- i 应该填写短描述，例如“白色小狗被递麦克风采访”“熊猫头捂脸哭泣”“无奈表情包”
+- 不要填写或编造图片文件名，不要输出 .jpg、.png、.gif 等扩展名
+- 即使用户没有明确要求发图，如果当前语境很适合用表情包回应，也可以主动从当前图片缓存的内容或意图中选择关键词填入 i
+- 主动发图要保守，只有图片明显贴合最新消息的情绪、吐槽、调侃、无奈、哭笑不得、卖萌或求回应时才选择图片
 
 ## 必须输出 NEXT 的情况
 - 最新消息 @ 你、回复你、称呼你的名字/昵称、问候你、向你提问、要求你做事
 - 最新消息明显是在邀请你接话，或者你不确定是否在找你
-- 例如“小芙下午好啊”“小芙在吗”“你怎么看”“帮我看看”都输出 {{"d":"NEXT"}}
+- 例如“下午好啊”“在吗”“你怎么看”“帮我看看”都输出 {{"d":"NEXT"}}
+- 例如用户要求发图、发表情包、随便发个表情包时，输出 {{"d":"NEXT","i":"从当前图片缓存里选择的图片内容或意图关键词"}}
+- 例如最新消息是在吐槽、撒娇、崩溃、无奈、调侃你或需要情绪回应，且当前图片缓存里有明显贴切的表情包，可以输出 {{"d":"NEXT","i":"贴切图片的内容或意图关键词"}}
 
 ## 可以输出 SKIP 的情况
 - 最新消息只是其他群友之间的闲聊，且没有指向你
 - 最新消息只是表情、语气词、无明确对象的短句，且你没有合适接话点
+- 最新消息是正经任务、规则问题、资料解释、需要文字帮助的请求时，除非用户明确要求发图，否则 i 应为空字符串
+- 如果没有非常贴切的图片，i 必须为空字符串，不要为了发图硬选
 
 ## 输出要求
 - 不要输出历史内容
 - 不要输出知识库内容
 - 不要输出正式回复
 - 不要输出解释
-- 只能输出 {{"d":"NEXT"}} 或 {{"d":"SKIP"}}
+- 只能输出 {{"d":"NEXT","i":"图片内容或意图关键词或空字符串"}} 或 {{"d":"SKIP","i":""}}
 '''
     # 格式化历史为OpenAI消息格式
     history_size_max_print = (
@@ -774,6 +783,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
     )
     OlivOSAIChatAssassin.logger.log(f"HISTORY - SIZE [{len(history)}/{history_size_max_print}]")
     messages_patch = {'当前记忆': thisMemory, '图片缓存': dict(OlivOSAIChatAssassin.data.gImageCache.get(group_id, {}))}
+    intent_image_cache = get_intent_image_cache(bot_hash, group_id)
     messages = get_ai_context(
         OlivOSAIChatAssassin.data.gData.getConfig(bot_hash), history, content,
         patch=messages_patch,
@@ -785,15 +795,19 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
             "content": '根据上一条群聊消息决定是否回复，只输出严格JSON对象。要回复时输出 {"r":["回复内容"]}；不回复时输出 {"r":[]}。不要输出解释或其它文本。'
         }
     )
-    messages_first_think_patch = {'当前记忆': thisMemory}
+    messages_first_think_patch = {
+        '当前记忆': thisMemory,
+        '图片缓存': intent_image_cache
+    }
     messages_first_think = get_ai_context(
         OlivOSAIChatAssassin.data.gData.getConfig(bot_hash), history, content_first_think,
-        patch=messages_first_think_patch
+        patch=messages_first_think_patch,
+        handler_list=[img_handler]
     )
     messages_first_think.append(
         {
             "role": "user",
-            "content": '根据上一条群消息完成二分类，只输出 {"d":"NEXT"} 或 {"d":"SKIP"}。如果上一条消息在称呼、问候、询问或要求你，输出 {"d":"NEXT"}。'
+            "content": '根据上一条群消息完成二分类，只输出 {"d":"NEXT","i":"图片内容或意图关键词或空字符串"} 或 {"d":"SKIP","i":""}。如果上一条消息在称呼、问候、询问或要求你，输出 {"d":"NEXT","i":""}。如果用户要求发图或发表情包，从当前图片缓存中选择一个贴切图片的内容或意图关键词填入 i，不要填写或编造文件名，不要输出扩展名。即使用户没要求发图，若最新消息很适合用表情包回应，也可以保守选择一个贴切图片关键词；没有明显贴切图片就让 i 为空。'
         }
     )
     # 调用 API
@@ -804,6 +818,8 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
     )
     first_thinking_done = False
     first_thinking_pass = True
+    first_thinking_image_ref = ''
+    first_thinking_image_added = False
     try:
         while (
             reply_list is None
@@ -840,6 +856,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                     first_thinking_data = json.loads(first_thinking_res)
                     if type(first_thinking_data) is dict:
                         first_thinking_str = str(first_thinking_data.get('d', '')).upper()
+                        first_thinking_image_ref = str(first_thinking_data.get('i', '')).strip()
                 except Exception:
                     first_thinking_str = str(first_thinking_res).strip().upper()
                 if first_thinking_str.startswith('NEXT'):
@@ -857,6 +874,19 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                     OlivOSAIChatAssassin.logger.log(f"FIRST THINK - SKIP - {first_thinking_res}")
                     reply_list = []
             if flag_need_think:
+                if first_thinking_image_ref and first_thinking_image_added is False:
+                    first_thinking_image_added = True
+                    image_cache_map = get_image_cache_map(bot_hash)
+                    image_file_name = resolve_image_ref(first_thinking_image_ref, image_cache_map)
+                    if image_file_name is not None:
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": f'本次如果要发送图片，优先使用这个真实图片文件名：[发图片:{image_file_name}]。不要改写文件名，不要使用图片描述当文件名。'
+                            }
+                        )
+                    else:
+                        OlivOSAIChatAssassin.logger.warn(f'FIRST THINK IMAGE REF ERR: {first_thinking_image_ref}')
                 reply_list = get_json_message(
                     OlivOSAIChatAssassin.webTools.call_ai(
                         OlivOSAIChatAssassin.data.gData.getConfig(bot_hash), messages,
@@ -1079,6 +1109,51 @@ def reply_history_wash(msg: list):
     return res
 
 
+def is_emoji_image_data(image_data: dict) -> bool:
+    if type(image_data) is not dict:
+        return False
+    type_text = str(image_data.get('type', ''))
+    intent_text = str(image_data.get('intent', ''))
+    content_text = str(image_data.get('content', ''))
+    target = f'{type_text} {intent_text} {content_text}'
+    return any(i in target for i in ('表情包', '梗图', 'mface', '表情', 'emoji'))
+
+
+def get_intent_image_cache(bot_hash: str, group_id: str) -> dict[str, dict]:
+    image_cache_map = get_image_cache_map(bot_hash)
+    current_image_names = [
+        str(item[0])
+        for item in OlivOSAIChatAssassin.data.gImageCache.get(group_id, [])
+        if isinstance(item, tuple) and len(item) >= 1
+    ]
+    max_size = int(
+        OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
+            'intent_image_cache_size',
+            OlivOSAIChatAssassin.data.configDefault['intent_image_cache_size']
+        )
+    )
+    if max_size <= 0:
+        return {}
+    current_candidates = []
+    global_candidates = []
+    for file_name, image_data in image_cache_map.items():
+        if not is_emoji_image_data(image_data):
+            continue
+        if file_name in current_image_names:
+            current_candidates.append(file_name)
+        else:
+            global_candidates.append(file_name)
+    random.shuffle(current_candidates)
+    random.shuffle(global_candidates)
+    selected_names = current_candidates + global_candidates[:max_size]
+    res: dict[str, dict] = {}
+    for file_name in selected_names:
+        image_data = image_cache_map.get(file_name)
+        if type(image_data) is dict:
+            res[file_name] = image_data
+    return res
+
+
 def get_image_cache_map(bot_hash: 'str|None' = None) -> dict[str, dict]:
     res: dict[str, dict] = {}
     if bot_hash is not None and OlivOSAIChatAssassin.data.gData is not None:
@@ -1134,6 +1209,9 @@ def image_tag_trans(match: re.Match, image_dir: str, image_cache_map: dict[str, 
 def resolve_image_ref(image_ref: str, image_cache_map: dict[str, dict]) -> 'str|None':
     if image_ref in image_cache_map:
         return image_ref
+    normalized_file_name = normalize_image_file_name_ref(image_ref, image_cache_map)
+    if normalized_file_name is not None:
+        return normalized_file_name
     normalized_ref = normalize_image_lookup_text(image_ref)
     if not normalized_ref:
         return None
@@ -1151,11 +1229,38 @@ def resolve_image_ref(image_ref: str, image_cache_map: dict[str, dict]) -> 'str|
         return None
     if len(candidates) >= 2 and candidates[1][0] == best_score:
         OlivOSAIChatAssassin.logger.warn(
-            f'IMAGE SEND SKIP - AMBIGUOUS REF: {image_ref} -> {best_file_name}, {candidates[1][1]}'
+            f'IMAGE SEND AMBIGUOUS PICK FIRST: {image_ref} -> {best_file_name}, {candidates[1][1]}'
         )
-        return None
     OlivOSAIChatAssassin.logger.log(f'IMAGE SEND MATCH - {image_ref} -> {best_file_name}')
     return best_file_name
+
+
+def normalize_image_file_name_ref(image_ref: str, image_cache_map: dict[str, dict]) -> 'str|None':
+    if type(image_ref) is not str:
+        return None
+    image_ref = image_ref.strip()
+    fixed_ref = re.sub(r'(\.[a-z0-9]{2,5})\1$', r'\1', image_ref, flags=re.IGNORECASE)
+    if fixed_ref in image_cache_map:
+        OlivOSAIChatAssassin.logger.log(f'IMAGE SEND FIX NAME - {image_ref} -> {fixed_ref}')
+        return fixed_ref
+    ref_stem = os.path.splitext(fixed_ref)[0].lower()
+    if not ref_stem:
+        return None
+    candidates = [
+        file_name
+        for file_name in image_cache_map
+        if os.path.splitext(file_name)[0].lower() == ref_stem
+    ]
+    if len(candidates) == 1:
+        OlivOSAIChatAssassin.logger.log(f'IMAGE SEND FIX NAME - {image_ref} -> {candidates[0]}')
+        return candidates[0]
+    if len(candidates) > 1:
+        requested_ext = get_image_ref_ext(fixed_ref)
+        for file_name in candidates:
+            if os.path.splitext(file_name)[1].lower().lstrip('.') == requested_ext:
+                OlivOSAIChatAssassin.logger.log(f'IMAGE SEND FIX NAME - {image_ref} -> {file_name}')
+                return file_name
+    return None
 
 
 def score_image_lookup(normalized_ref: str, image_ref: str, requested_ext: str, file_name: str, image_data: dict) -> int:
@@ -1213,6 +1318,118 @@ def normalize_image_lookup_text(data: str) -> str:
     return res
 
 
+def get_image_cleanup_time(bot_hash: str) -> float:
+    return float(
+        OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
+            'image_cleanup_non_emoji_time',
+            OlivOSAIChatAssassin.data.configDefault['image_cleanup_non_emoji_time']
+        )
+    )
+
+
+def cleanup_non_emoji_images(bot_hash: str) -> None:
+    cleanup_time = get_image_cleanup_time(bot_hash)
+    if cleanup_time <= 0:
+        return
+    cleanup_all_bot_image_memory()
+    cleanup_orphan_image_files(cleanup_time)
+    cleanup_runtime_image_cache()
+
+
+def cleanup_all_bot_image_memory() -> None:
+    if OlivOSAIChatAssassin.data.gData is None:
+        return
+    now = time.time()
+    image_dir = os.path.abspath(OlivOSAIChatAssassin.data.gImageDir)
+    image_dir_with_sep = image_dir + os.sep
+    for bot_hash_this in list(OlivOSAIChatAssassin.data.gData.memory.keys()):
+        cleanup_time = get_image_cleanup_time(bot_hash_this)
+        if cleanup_time <= 0:
+            continue
+        global_image_cache = (
+            OlivOSAIChatAssassin.data.gData
+            .getMemory(bot_hash_this)
+            .setdefault('全局', {})
+            .setdefault('图片缓存', {})
+        )
+        if type(global_image_cache) is not dict:
+            continue
+        flag_changed = False
+        for file_name, image_data in list(global_image_cache.items()):
+            if is_emoji_image_data(image_data):
+                continue
+            file_path = os.path.abspath(os.path.join(image_dir, str(file_name)))
+            if not file_path.startswith(image_dir_with_sep):
+                continue
+            if not os.path.exists(file_path):
+                global_image_cache.pop(file_name, None)
+                flag_changed = True
+                continue
+            try:
+                if now - os.path.getmtime(file_path) > cleanup_time:
+                    os.remove(file_path)
+                    global_image_cache.pop(file_name, None)
+                    flag_changed = True
+                    OlivOSAIChatAssassin.logger.log(f'IMAGE CLEANUP - {file_name}')
+            except Exception as e:
+                OlivOSAIChatAssassin.logger.warn(f'IMAGE CLEANUP ERR - {file_name}: {e}')
+        if flag_changed:
+            OlivOSAIChatAssassin.load.write_memory(bot_hash=bot_hash_this)
+
+
+def get_referenced_image_files() -> set[str]:
+    res: set[str] = set()
+    if OlivOSAIChatAssassin.data.gData is not None:
+        for bot_hash_this in list(OlivOSAIChatAssassin.data.gData.memory.keys()):
+            global_image_cache = (
+                OlivOSAIChatAssassin.data.gData
+                .getMemory(bot_hash_this)
+                .get('全局', {})
+                .get('图片缓存', {})
+            )
+            if type(global_image_cache) is dict:
+                res.update(str(file_name) for file_name in global_image_cache.keys())
+    for cache_queue in OlivOSAIChatAssassin.data.gImageCache.values():
+        for item in cache_queue:
+            if isinstance(item, tuple) and len(item) >= 1:
+                res.add(str(item[0]))
+    return res
+
+
+def cleanup_orphan_image_files(cleanup_time: float) -> None:
+    image_dir = os.path.abspath(OlivOSAIChatAssassin.data.gImageDir)
+    if not os.path.isdir(image_dir):
+        return
+    referenced_files = get_referenced_image_files()
+    now = time.time()
+    for file_name in os.listdir(image_dir):
+        if file_name in referenced_files:
+            continue
+        file_path = os.path.abspath(os.path.join(image_dir, file_name))
+        image_dir_with_sep = image_dir + os.sep
+        if not file_path.startswith(image_dir_with_sep) or not os.path.isfile(file_path):
+            continue
+        try:
+            if now - os.path.getmtime(file_path) > cleanup_time:
+                os.remove(file_path)
+                OlivOSAIChatAssassin.logger.log(f'IMAGE CLEANUP ORPHAN - {file_name}')
+        except Exception as e:
+            OlivOSAIChatAssassin.logger.warn(f'IMAGE CLEANUP ORPHAN ERR - {file_name}: {e}')
+
+
+def cleanup_runtime_image_cache() -> None:
+    image_dir = os.path.abspath(OlivOSAIChatAssassin.data.gImageDir)
+    for group_id, cache_queue in list(OlivOSAIChatAssassin.data.gImageCache.items()):
+        keep_items = deque(maxlen=cache_queue.maxlen)
+        for item in cache_queue:
+            if not (isinstance(item, tuple) and len(item) >= 1):
+                continue
+            file_path = os.path.abspath(os.path.join(image_dir, str(item[0])))
+            if os.path.exists(file_path):
+                keep_items.append(item)
+        OlivOSAIChatAssassin.data.gImageCache[group_id] = keep_items
+
+
 def msg_trans(msg: str, group_id: str, *, plugin_event: 'OlivOS.API.Event|None' = None, bot_hash: str):
     res = msg
 
@@ -1221,6 +1438,7 @@ def msg_trans(msg: str, group_id: str, *, plugin_event: 'OlivOS.API.Event|None' 
 
     if '[OP:image' not in res and ':mface,' not in res:
         return res
+    cleanup_non_emoji_images(bot_hash)
 
     def resolve_media_cache(file_name: str, image_url: 'str|None', message_text: str, image_type: str, summary: 'str|None' = None):
         res_data = None
