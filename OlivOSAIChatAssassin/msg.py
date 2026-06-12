@@ -883,7 +883,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
             t_set_memory.start()
             OlivOSAIChatAssassin.tools.sleep(1 + (random.random() * 2 - 1) * 0.95)
             reply(
-                plugin_event, reply_trans(reply_list),
+                plugin_event, reply_trans(reply_list, bot_hash=bot_hash),
                 total_time_past=time.perf_counter() - total_start
             )
             t_set_memory.join()
@@ -1079,8 +1079,29 @@ def reply_history_wash(msg: list):
     return res
 
 
-def reply_trans(msg: list):
+def get_image_cache_map(bot_hash: 'str|None' = None) -> dict[str, dict]:
+    res: dict[str, dict] = {}
+    if bot_hash is not None and OlivOSAIChatAssassin.data.gData is not None:
+        global_image_cache = (
+            OlivOSAIChatAssassin.data.gData
+            .getMemory(bot_hash)
+            .get('全局', {})
+            .get('图片缓存', {})
+        )
+        if type(global_image_cache) is dict:
+            for key, value in global_image_cache.items():
+                if type(value) is dict:
+                    res[str(key)] = value
+    for cache_queue in OlivOSAIChatAssassin.data.gImageCache.values():
+        for item in cache_queue:
+            if isinstance(item, tuple) and len(item) >= 2 and type(item[1]) is dict:
+                res[str(item[0])] = item[1]
+    return res
+
+
+def reply_trans(msg: list, bot_hash: 'str|None' = None):
     res = []
+    image_cache_map = get_image_cache_map(bot_hash)
     for i in msg:
         res_i = i
         image_dir = os.path.abspath(OlivOSAIChatAssassin.data.gImageDir)
@@ -1089,10 +1110,106 @@ def reply_trans(msg: list):
             res_i = re.sub(r'\[图片.*?\]', '', res_i)
             res_i = re.sub(
                 r'\[发图片:(.+)\]',
-                lambda m: f'[OP:image,file=file:///{image_dir}/{m.group(1)}]',
+                lambda m: image_tag_trans(m, image_dir, image_cache_map),
                 res_i
             )
             res.append(res_i)
+    return res
+
+
+def image_tag_trans(match: re.Match, image_dir: str, image_cache_map: dict[str, dict]) -> str:
+    image_ref = match.group(1).strip()
+    file_name = resolve_image_ref(image_ref, image_cache_map)
+    if file_name is None:
+        OlivOSAIChatAssassin.logger.warn(f'IMAGE SEND SKIP - FILE NOT IN CACHE: {image_ref}')
+        return ''
+    file_path = os.path.abspath(os.path.join(image_dir, file_name))
+    image_dir_with_sep = os.path.abspath(image_dir) + os.sep
+    if not file_path.startswith(image_dir_with_sep) or not os.path.exists(file_path):
+        OlivOSAIChatAssassin.logger.warn(f'IMAGE SEND SKIP - FILE NOT FOUND: {file_name}')
+        return ''
+    return f'[OP:image,file=file:///{file_path}]'
+
+
+def resolve_image_ref(image_ref: str, image_cache_map: dict[str, dict]) -> 'str|None':
+    if image_ref in image_cache_map:
+        return image_ref
+    normalized_ref = normalize_image_lookup_text(image_ref)
+    if not normalized_ref:
+        return None
+    requested_ext = get_image_ref_ext(image_ref)
+    candidates: list[tuple[int, str]] = []
+    for file_name, image_data in image_cache_map.items():
+        score = score_image_lookup(normalized_ref, image_ref, requested_ext, file_name, image_data)
+        if score > 0:
+            candidates.append((score, file_name))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    best_score, best_file_name = candidates[0]
+    if best_score < 100:
+        return None
+    if len(candidates) >= 2 and candidates[1][0] == best_score:
+        OlivOSAIChatAssassin.logger.warn(
+            f'IMAGE SEND SKIP - AMBIGUOUS REF: {image_ref} -> {best_file_name}, {candidates[1][1]}'
+        )
+        return None
+    OlivOSAIChatAssassin.logger.log(f'IMAGE SEND MATCH - {image_ref} -> {best_file_name}')
+    return best_file_name
+
+
+def score_image_lookup(normalized_ref: str, image_ref: str, requested_ext: str, file_name: str, image_data: dict) -> int:
+    score = 0
+    normalized_file_name = normalize_image_lookup_text(file_name)
+    if normalized_ref == normalized_file_name:
+        score = max(score, 300)
+    elif normalized_ref in normalized_file_name or normalized_file_name in normalized_ref:
+        score = max(score, 180)
+    for key, value_score in (
+        ('content', 160),
+        ('intent', 120),
+        ('type', 80),
+    ):
+        value = image_data.get(key, '')
+        if type(value) is not str:
+            continue
+        normalized_value = normalize_image_lookup_text(value)
+        if not normalized_value:
+            continue
+        if normalized_ref == normalized_value:
+            score = max(score, value_score + 80)
+        elif normalized_ref in normalized_value or normalized_value in normalized_ref:
+            score = max(score, value_score)
+    file_stem = os.path.splitext(file_name)[0].lower()
+    ref_stem = os.path.splitext(image_ref.strip())[0].lower()
+    if ref_stem and file_stem == ref_stem:
+        score += 90
+    file_ext = os.path.splitext(file_name)[1].lower().lstrip('.')
+    if requested_ext and file_ext == requested_ext:
+        score += 60
+    elif not requested_ext and file_ext == 'gif':
+        score += 20
+    elif file_ext == 'gif':
+        score += 20
+    return score
+
+
+def get_image_ref_ext(data: str) -> str:
+    if type(data) is not str:
+        return ''
+    ext = os.path.splitext(data.strip())[1].lower().lstrip('.')
+    if re.fullmatch(r'[a-z0-9]{2,5}', ext):
+        return ext
+    return ''
+
+
+def normalize_image_lookup_text(data: str) -> str:
+    if type(data) is not str:
+        return ''
+    res = data.strip().lower()
+    res = re.sub(r'\.[a-z0-9]{2,5}$', '', res)
+    res = re.sub(r'表情包|图片|照片|文件|发图片|发送|来一张|一张|这个|那个', '', res)
+    res = re.sub(r'[\s\[\]【】()（）:：,，.;。;；"“”\'‘’_-]+', '', res)
     return res
 
 
