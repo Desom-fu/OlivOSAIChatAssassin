@@ -77,6 +77,15 @@ def load_staticKnowledge():
         OlivOSAIChatAssassin.logger.warn(f'加载知识库完全失败: {e}')
 
 
+def load_skills():
+    """加载技能索引:递归扫描 data/skills/ 目录,构建技能索引"""
+    try:
+        OlivOSAIChatAssassin.data.gSkillsIndex = OlivOSAIChatAssassin.skillManager.build_skills_index()
+    except Exception as e:
+        OlivOSAIChatAssassin.logger.warn(f'加载技能索引失败: {e}')
+        OlivOSAIChatAssassin.data.gSkillsIndex = {}
+
+
 class DataManagerType(Enum):
     CONFIG = 'CONFIG'
     MEMORY = 'MEMORY'

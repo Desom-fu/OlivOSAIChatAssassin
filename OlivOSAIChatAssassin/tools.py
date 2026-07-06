@@ -1,5 +1,6 @@
 import time
 import threading
+import functools
 from typing import Optional
 
 import OlivOSAIChatAssassin
@@ -106,6 +107,7 @@ def sleep(sleep_time: float):
     time.sleep(sleep_time)
 
 
+@functools.lru_cache(maxsize=50000)
 def get_recommendRank(word1_in: str, word2_in: str, gate_rank: int = 1000, rate: float = 0.1):
     word1 = word1_in.lower()
     word2 = word2_in.lower()
@@ -194,8 +196,27 @@ def peak_up_recommendMatch(
                     k_str = k if father is None else f'{father} -> {k}'
                     OlivOSAIChatAssassin.logger.log(f'PEAK UP - [{dictName}] {k_str} (cached)')
         else:
+            # 提取 target 的所有 2 字符子串(bigram),用于快速预筛
+            # 如果 key 和 target 没有任何 2 字符公共子串,DP 匹配必然失败,可以跳过
+            # 这将 O(N * L_key * L_target) 的 DP 调用减少为 O(N * L_key) 的预筛 + 少量 DP
+            target_lower = target.lower()
+            target_bigrams = set()
+            if len(target_lower) >= 2:
+                for i in range(len(target_lower) - 1):
+                    target_bigrams.add(target_lower[i:i + 2])
             for k in dictMap_key_list:
                 if k not in matchedList_this:
+                    # Bigram 预筛:跳过与 target 无 2 字符子串重叠的 key
+                    if target_bigrams:
+                        k_lower = k.lower()
+                        if len(k_lower) >= 2:
+                            has_overlap = False
+                            for i in range(len(k_lower) - 1):
+                                if k_lower[i:i + 2] in target_bigrams:
+                                    has_overlap = True
+                                    break
+                            if not has_overlap:
+                                continue
                     rank = OlivOSAIChatAssassin.tools.get_recommendRank(k, target, rate=rate)
                     if OlivOSAIChatAssassin.tools.get_recommendMatch(rank):
                         res_key_list.append(k)

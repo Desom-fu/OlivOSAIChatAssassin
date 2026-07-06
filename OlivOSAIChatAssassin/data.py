@@ -38,6 +38,9 @@ gHistoryLoaded: bool = False
 gStaticKnowledgeDir = './plugin/data/OlivOSAIChatAssassin/Knowledge'
 gStaticKnowledge = {}
 
+gSkillsDir = './plugin/data/OlivOSAIChatAssassin/skills'
+gSkillsIndex: 'dict' = {}
+
 gImageDir = './plugin/data/OlivOSAIChatAssassin/Image'
 gImageCache: 'dict[str, deque]' = {}
 
@@ -92,5 +95,10 @@ configDefault = {
         'mode': 'base64',
         'enable': False,
         "queue_size": 8
-    }
+    },
+    'skills_enable': True,
+    'skills_max_chars': 2000,
+    'skills_max_matches': 2,
+    'skills_match_rate': 0.12,
+    'knowledge_cache_max': 500
 }

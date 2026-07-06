@@ -533,6 +533,19 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                     ):
                         OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']['知识缓存'][k] = v
                         OlivOSAIChatAssassin.logger.log(f'[更新知识] - {k}\n{v}')
+                # 限制知识缓存大小,避免无限增长导致 peak_up 匹配越来越慢
+                # Python 3.7+ dict 保持插入顺序,删除最早的条目
+                _knowledge_cache = OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']['知识缓存']
+                _max_cache = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
+                    'knowledge_cache_max',
+                    OlivOSAIChatAssassin.data.configDefault['knowledge_cache_max']
+                )
+                if len(_knowledge_cache) > _max_cache:
+                    _trim_count = len(_knowledge_cache) - _max_cache
+                    _old_keys = list(_knowledge_cache.keys())[:_trim_count]
+                    for _old_key in _old_keys:
+                        _knowledge_cache.pop(_old_key, None)
+                    OlivOSAIChatAssassin.logger.log(f'[知识缓存] 裁剪至 {_max_cache} 条 (移除 {_trim_count} 条旧知识)')
                 if (
                     'u' in call_ai_data
                     and type(call_ai_data['u']) is dict
@@ -705,6 +718,14 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
             f'HIT - {time.perf_counter() - total_start:.2f}'
             f'/{OlivOSAIChatAssassin.data.gGroupLock[group_id].getRemaining():.2f} s - {message}'
         )
+    # --- Skills 动态注入 ---
+    skills_context = ''
+    if OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
+        'skills_enable', OlivOSAIChatAssassin.data.configDefault['skills_enable']
+    ):
+        skills_context = OlivOSAIChatAssassin.skillManager.get_skills_context(
+            history, bot_hash
+        )
     examples_reply = {
         'r': ['好的']
     }
@@ -713,9 +734,6 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
 - 历史和最新消息中都附带可用的富文本资源，可以借用，但不要编造不存在的资源
 - 最新的消息中附带当前的记忆信息
 - 越新的消息越重要
-
-# 固定记忆
-- {json.dumps(thisMemoryC, ensure_ascii=False)}
 
 # 当前任务
 ## 将回复内容输出至r的值中
@@ -728,6 +746,10 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
 
 # 参考输出，以严格的Json格式输出
 {json.dumps(examples_reply, ensure_ascii=False)}
+
+# 固定记忆
+- {json.dumps(thisMemoryC, ensure_ascii=False)}
+{skills_context}
 '''
     content_first_think = f'''{contentDefault}
 # 信息
