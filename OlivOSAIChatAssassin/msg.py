@@ -533,19 +533,6 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                     ):
                         OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']['知识缓存'][k] = v
                         OlivOSAIChatAssassin.logger.log(f'[更新知识] - {k}\n{v}')
-                # 限制知识缓存大小,避免无限增长导致 peak_up 匹配越来越慢
-                # Python 3.7+ dict 保持插入顺序,删除最早的条目
-                _knowledge_cache = OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']['知识缓存']
-                _max_cache = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
-                    'knowledge_cache_max',
-                    OlivOSAIChatAssassin.data.configDefault['knowledge_cache_max']
-                )
-                if len(_knowledge_cache) > _max_cache:
-                    _trim_count = len(_knowledge_cache) - _max_cache
-                    _old_keys = list(_knowledge_cache.keys())[:_trim_count]
-                    for _old_key in _old_keys:
-                        _knowledge_cache.pop(_old_key, None)
-                    OlivOSAIChatAssassin.logger.log(f'[知识缓存] 裁剪至 {_max_cache} 条 (移除 {_trim_count} 条旧知识)')
                 if (
                     'u' in call_ai_data
                     and type(call_ai_data['u']) is dict

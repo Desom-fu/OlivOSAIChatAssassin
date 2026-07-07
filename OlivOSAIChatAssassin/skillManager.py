@@ -58,7 +58,32 @@ _STOP_WORDS = frozenset([
     '后面', '这个', '那个', '这些', '那些', '这里', '那里', '时候',
     '现在', '之前', '之后', '以后', '以前', '好的', '好吧', '我想',
     '我要', '我会', '我能', '的话', '一样', '一般', '一下', '一种',
+    '小芙',
 ])
+_EN_STOP_WORDS = frozenset([
+    'a', 'an', 'and', 'are', 'attention', 'can', 'could', 'do', 'does', 'for', 'fu',
+    'help', 'how', 'i', 'in', 'into', 'is', 'it', 'make', 'me', 'my', 'of', 'on', 'or',
+    'pay', 'please', 'should', 'tell', 'the', 'to', 'what', 'when', 'where', 'which',
+    'who', 'why', 'with', 'write', 'create', 'develop', 'developing', 'need', 'needs',
+    'want', 'xiao', 'you', 'your',
+])
+_TRADITIONAL_TO_SIMPLIFIED = str.maketrans({
+    '個': '个', '兩': '两', '來': '来', '們': '们', '係': '系', '側': '侧', '寫': '写', '創': '创',
+    '則': '则', '劇': '剧', '劃': '划', '動': '动', '區': '区', '參': '参', '發': '发', '變': '变',
+    '員': '员', '問': '问', '國': '国', '圖': '图', '場': '场', '壓': '压', '夠': '够', '學': '学',
+    '實': '实', '對': '对', '專': '专', '將': '将', '導': '导', '應': '应', '開': '开', '張': '张',
+    '後': '后', '從': '从', '復': '复', '徵': '征', '得': '得', '憶': '忆', '應': '应', '懷': '怀',
+    '戰': '战', '戶': '户', '擇': '择', '擊': '击', '據': '据', '數': '数', '斷': '断', '於': '于',
+    '無': '无', '時': '时', '書': '书', '會': '会', '樣': '样', '標': '标', '檔': '档', '權': '权',
+    '歡': '欢', '氣': '气', '沒': '没', '為': '为', '爲': '为', '當': '当', '畫': '画', '發': '发',
+    '真': '真', '碼': '码', '礎': '础', '稱': '称', '種': '种', '穩': '稳', '簡': '简', '籤': '签',
+    '組': '组', '綁': '绑', '維': '维', '網': '网', '義': '义', '舉': '举', '與': '与', '艦': '舰',
+    '術': '术', '號': '号', '虛': '虚', '裡': '里', '製': '制', '規': '规', '計': '计', '註': '注',
+    '設': '设', '說': '说', '課': '课', '請': '请', '讀': '读', '譯': '译', '護': '护', '讓': '让',
+    '貝': '贝', '資': '资', '質': '质', '輸': '输', '轉': '转', '這': '这', '還': '还', '過': '过',
+    '邊': '边', '邏': '逻', '關': '关', '靈': '灵', '體': '体', '點': '点', '麼': '么', '麼': '么',
+    '嗎': '吗', '誰': '谁', '負': '负', '焰': '焰', '該': '该', '題': '题', '報': '报', '類': '类',
+})
 
 # 小文件阈值 (字符数): 低于此值整包读取
 _SMALL_FILE_THRESHOLD = 1500
@@ -75,6 +100,10 @@ _KW_TOP_N = 40
 
 # 缓存TTL (秒),复用插件的 search_ageing 配置
 _CACHE_TTL_DEFAULT = 900
+_REFERENCE_PRIORITY_KEYWORDS = frozenset([
+    'app.json', 'framework events', 'lifecycle events', 'olivos', 'plugin', 'shouhunzhe-trpg',
+    '吴焰', '灵能力', '狩魂者', '缺陷标签', '负面标签', '插件',
+])
 
 
 # ============================================================
@@ -88,6 +117,7 @@ _skills_cache: 'dict' = {
     'match': {},     # kw_hash -> (matches_list, timestamp)
     'rank': {},      # (word1, word2) -> rank_int (永久,不过期,因为纯函数)
     'file': {},      # path -> (content_str, mtime_float)
+    'file_norm': {}, # path -> (normalized_content_str, mtime_float)
 }
 
 
@@ -147,12 +177,190 @@ def _cached_file_read(path: str) -> 'str|None':
         return None
 
 
+def _cached_normalized_file_read(path: str) -> 'str|None':
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    cached = _skills_cache['file_norm'].get(path)
+    if cached is not None:
+        cached_content, cached_mtime = cached
+        if cached_mtime == mtime:
+            return cached_content
+    content = _cached_file_read(path)
+    if content is None:
+        return None
+    normalized = _normalize_text_for_match(content)
+    _skills_cache['file_norm'][path] = (normalized, mtime)
+    return normalized
+
+
+def _normalize_text_for_match(text: 'str|None') -> str:
+    if not isinstance(text, str):
+        return ''
+    normalized = text.lower().translate(_TRADITIONAL_TO_SIMPLIFIED)
+    normalized = normalized.replace('app json', 'app.json')
+    normalized = normalized.replace('life cycle', 'lifecycle')
+    normalized = re.sub(r'[_/\\]+', ' ', normalized)
+    normalized = re.sub(r'\s+', ' ', normalized)
+    return normalized.strip()
+
+
+def _dedupe_keep_order(items: 'list[str]') -> 'list[str]':
+    seen = set()
+    result = []
+    for item in items:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
+def _expand_alias_keywords(combined_text: str, keywords: 'list[str]') -> 'list[str]':
+    text_norm = _normalize_text_for_match(combined_text)
+    compact = text_norm.replace(' ', '')
+    expanded = list(keywords)
+
+    def _add_many(*items: str):
+        for item in items:
+            if item:
+                expanded.append(item)
+
+    if 'shouhunzhe' in text_norm or '狩魂者' in text_norm:
+        _add_many('狩魂者', 'shouhunzhe-trpg')
+    if 'spiritual ability' in text_norm or ('spiritual' in text_norm and 'ability' in text_norm):
+        _add_many('灵能力')
+    if 'wu yan' in text_norm or 'wuyan' in compact or '吴焰' in text_norm:
+        _add_many('吴焰')
+    if (
+        'negative tag' in text_norm
+        or 'negative tags' in text_norm
+        or '负面标签' in text_norm
+        or '缺陷标签' in text_norm
+    ):
+        _add_many('负面标签', '缺陷标签')
+        if 'spiritual ability' in text_norm or ('spiritual' in text_norm and 'ability' in text_norm):
+            _add_many('狩魂者', 'shouhunzhe-trpg')
+    if 'app.json' in text_norm or 'appjson' in compact:
+        _add_many('app.json')
+    if 'olivos' in text_norm:
+        _add_many('olivos')
+        if 'plugin' in text_norm or '插件' in text_norm:
+            _add_many('插件', 'plugin')
+        if (
+            'event' in text_norm
+            or 'events' in text_norm
+            or '事件' in text_norm
+            or '上报' in text_norm
+        ):
+            _add_many('事件', 'framework events', 'lifecycle events')
+        if 'app.json' in text_norm or 'appjson' in compact:
+            _add_many('app.json', '插件')
+    if '上报来的事件' in text_norm or '上报事件' in text_norm:
+        _add_many('事件', 'framework events', 'lifecycle events')
+    if '注意事项' in text_norm or '注意事項' in combined_text:
+        _add_many('注意事项')
+
+    normalized_keywords = []
+    for keyword in expanded:
+        normalized = _normalize_text_for_match(keyword)
+        if normalized:
+            normalized_keywords.append(normalized)
+    return _dedupe_keep_order(normalized_keywords)
+
+
+def _resolve_skills_dirs() -> 'list[str]':
+    dirs = []
+    primary_dir = getattr(OlivOSAIChatAssassin.data, 'gSkillsDir', '')
+    if isinstance(primary_dir, str) and primary_dir.strip():
+        dirs.append(primary_dir)
+    extra_dirs = getattr(OlivOSAIChatAssassin.data, 'gSkillsExtraDirs', [])
+    if isinstance(extra_dirs, (list, tuple)):
+        for extra_dir in extra_dirs:
+            if isinstance(extra_dir, str) and extra_dir.strip():
+                dirs.append(extra_dir)
+    resolved = []
+    seen = set()
+    for path in dirs:
+        full_path = os.path.abspath(os.path.expanduser(path))
+        if full_path not in seen:
+            seen.add(full_path)
+            resolved.append(full_path)
+    return resolved
+
+
+def _keyword_in_text(keyword: str, text: str) -> bool:
+    if not keyword or not text:
+        return False
+    if keyword in text:
+        return True
+    keyword_compact = keyword.replace(' ', '')
+    if keyword_compact and keyword_compact != keyword and keyword_compact in text.replace(' ', ''):
+        return True
+    return False
+
+
+def _collect_reference_hits(entry: dict, keywords: 'list[str]') -> 'list[str]':
+    hits = []
+    for ref_path in entry.get('references', []):
+        ref_full = os.path.join(entry['dir'], ref_path)
+        ref_content = _cached_normalized_file_read(ref_full)
+        if not ref_content:
+            continue
+        for keyword in keywords:
+            if keyword not in hits and _keyword_in_text(keyword, ref_content):
+                hits.append(keyword)
+    return hits
+
+
+def _collect_body_hits(entry: dict, keywords: 'list[str]') -> 'list[str]':
+    body_content = _cached_normalized_file_read(entry.get('skill_md', ''))
+    if not body_content:
+        return []
+    body_text = _normalize_text_for_match(_FRONTMATTER_RE.sub('', body_content, count=1))
+    hits = []
+    for keyword in keywords:
+        if keyword not in hits and _keyword_in_text(keyword, body_text):
+            hits.append(keyword)
+    return hits
+
+
+def _header_match_score(header: dict, keywords: 'list[str]') -> int:
+    title_norm = _normalize_text_for_match(header.get('title', ''))
+    score = 0
+    for keyword in keywords:
+        if _keyword_in_text(keyword, title_norm) or _keyword_in_text(title_norm, keyword):
+            score += max(4, len(keyword))
+    return score
+
+
+def _is_specific_reference_keyword(keyword: str) -> bool:
+    if keyword in _REFERENCE_PRIORITY_KEYWORDS:
+        return True
+    if not keyword:
+        return False
+    if '.' in keyword or '-' in keyword:
+        return True
+    if re.match(r'^[\u4e00-\u9fff]+$', keyword):
+        return len(keyword) >= 4
+    return len(keyword) >= 5
+
+
+def _select_reference_keywords(keywords: 'list[str]') -> 'list[str]':
+    priority = [keyword for keyword in keywords if _is_specific_reference_keyword(keyword)]
+    if priority:
+        return _dedupe_keep_order(priority)
+    return _dedupe_keep_order(keywords)
+
+
 def clear_cache():
     """清空所有缓存(索引重建时调用)"""
     _skills_cache['keyword'].clear()
     _skills_cache['match'].clear()
     _skills_cache['rank'].clear()
     _skills_cache['file'].clear()
+    _skills_cache['file_norm'].clear()
 
 
 # ============================================================
@@ -167,27 +375,27 @@ def build_skills_index() -> dict:
         dict: {skill_name: index_entry, ...}
     """
     clear_cache()
-    skills_dir = OlivOSAIChatAssassin.data.gSkillsDir
     index = {}
-
-    try:
-        os.makedirs(skills_dir, exist_ok=True)
-    except Exception as e:
-        OlivOSAIChatAssassin.logger.warn(f'[Skills] 创建技能目录失败: {e}')
-        return index
-
-    try:
-        for root, dirs, files in os.walk(skills_dir):
-            if 'SKILL.md' in files:
-                skill_md_path = os.path.join(root, 'SKILL.md')
-                entry = _parse_skill_md(skill_md_path, root)
-                if entry is not None:
+    for skills_dir in _resolve_skills_dirs():
+        if not os.path.isdir(skills_dir):
+            continue
+        try:
+            for root, dirs, files in os.walk(skills_dir):
+                if 'SKILL.md' in files:
+                    skill_md_path = os.path.join(root, 'SKILL.md')
+                    entry = _parse_skill_md(skill_md_path, root)
+                    if entry is None:
+                        continue
                     name = entry.get('name', '')
-                    if name:
-                        index[name] = entry
-                        OlivOSAIChatAssassin.logger.log(f'[Skills] 已索引技能: {name} ({len(entry.get("headers", []))} 个标题)')
-    except Exception as e:
-        OlivOSAIChatAssassin.logger.warn(f'[Skills] 扫描技能目录失败: {e}')
+                    if not name:
+                        continue
+                    if name in index:
+                        OlivOSAIChatAssassin.logger.log(f'[Skills] 跳过重复技能: {name} [{skill_md_path}]')
+                        continue
+                    index[name] = entry
+                    OlivOSAIChatAssassin.logger.log(f'[Skills] 已索引技能: {name} ({len(entry.get("headers", []))} 个标题)')
+        except Exception as e:
+            OlivOSAIChatAssassin.logger.warn(f'[Skills] 扫描技能目录失败 [{skills_dir}]: {e}')
 
     OlivOSAIChatAssassin.logger.log(f'[Skills] 索引完成,共 {len(index)} 个技能')
     return index
@@ -403,7 +611,8 @@ def extract_context_keywords(history: 'list[dict]') -> 'list[str]':
     deduped.sort(key=lambda x: -(x[1] * len(x[0])))
 
     # 返回关键词列表
-    return [kw for kw, _ in deduped[:_KW_TOP_N]]
+    base_keywords = [kw for kw, _ in deduped[:_KW_TOP_N]]
+    return _expand_alias_keywords(combined_text, base_keywords)
 
 
 def _extract_ngrams(text: str, candidates: 'dict[str, int]'):
@@ -412,8 +621,9 @@ def _extract_ngrams(text: str, candidates: 'dict[str, int]'):
     中文连续字符和英文单词都会被提取。
     """
     # 提取连续的中文段和英文单词段
-    segments = re.findall(r'[\u4e00-\u9fff]{2,20}|[a-zA-Z]{3,30}', text)
+    segments = re.findall(r'[\u4e00-\u9fff]{2,20}|[a-zA-Z][a-zA-Z0-9_.-]{2,30}', text)
     for seg in segments:
+        seg = _normalize_text_for_match(seg)
         seg_len = len(seg)
         if seg_len < _KW_MIN_LEN:
             continue
@@ -427,7 +637,9 @@ def _extract_ngrams(text: str, candidates: 'dict[str, int]'):
                         candidates[ngram] = candidates.get(ngram, 0) + 1
         else:
             # 英文单词直接作为候选
-            candidates[seg.lower()] = candidates.get(seg.lower(), 0) + 1
+            if seg in _EN_STOP_WORDS:
+                continue
+            candidates[seg] = candidates.get(seg, 0) + 1
 
 
 # ============================================================
@@ -449,6 +661,11 @@ def match_skills(
         list[dict]: [{entry, score, matched_headers, matched_nav}, ...]
     """
     skills_index = OlivOSAIChatAssassin.data.gSkillsIndex
+    keywords = _dedupe_keep_order([
+        _normalize_text_for_match(keyword)
+        for keyword in keywords
+        if isinstance(keyword, str) and _normalize_text_for_match(keyword)
+    ])
     if not skills_index or not keywords:
         return []
 
@@ -468,31 +685,38 @@ def match_skills(
         score = 0
         matched_headers = []
         matched_nav = []
+        matched_body_keywords = []
+        matched_reference_keywords = []
 
         # --- Layer 1: 技能名称/描述匹配 ---
         desc_text = entry.get('desc_text', f"{entry.get('name', '')} {entry.get('description', '')}")
+        desc_text_norm = _normalize_text_for_match(desc_text)
         for kw in keywords:
+            if _keyword_in_text(kw, desc_text_norm):
+                score += 3
+                continue
             # 用 _cached_rank 做带缓存的模糊匹配
-            if len(kw) <= len(desc_text):
-                rank = _cached_rank(kw, desc_text, rate)
+            if len(kw) <= len(desc_text_norm):
+                rank = _cached_rank(kw, desc_text_norm, rate)
             else:
-                rank = _cached_rank(desc_text, kw, rate)
+                rank = _cached_rank(desc_text_norm, kw, rate)
             if OlivOSAIChatAssassin.tools.get_recommendMatch(rank):
                 score += 1
 
         # --- Layer 2: 标题匹配 ---
         for header in entry.get('headers', []):
             header_title = header.get('title', '')
+            header_title_norm = _normalize_text_for_match(header_title)
             for kw in keywords:
-                if kw in header_title or header_title in kw:
+                if _keyword_in_text(kw, header_title_norm) or _keyword_in_text(header_title_norm, kw):
                     matched_headers.append(header)
-                    score += 2  # 标题匹配权重更高
+                    score += 4
                     break
                 # 模糊匹配标题
-                if len(kw) <= len(header_title):
-                    rank = _cached_rank(kw, header_title, rate)
+                if len(kw) <= len(header_title_norm):
+                    rank = _cached_rank(kw, header_title_norm, rate)
                 else:
-                    rank = _cached_rank(header_title, kw, rate)
+                    rank = _cached_rank(header_title_norm, kw, rate)
                 if OlivOSAIChatAssassin.tools.get_recommendMatch(rank):
                     matched_headers.append(header)
                     score += 2
@@ -501,23 +725,33 @@ def match_skills(
         # --- Layer 3: 导航表匹配 ---
         for nav_entry in entry.get('nav_table', []):
             # 导航表的值 (第一列通常是问题/关键词,第二列是章节)
-            nav_values = list(nav_entry.values())
+            nav_values = [_normalize_text_for_match(str(v)) for v in nav_entry.values()]
             for kw in keywords:
                 hit = False
                 for val in nav_values:
-                    if kw in val or val in kw:
+                    if _keyword_in_text(kw, val) or _keyword_in_text(val, kw):
                         matched_nav.append(nav_entry)
-                        score += 3  # 导航表匹配权重最高
+                        score += 5
                         hit = True
                         break
                 if hit:
                     break
+
+        # --- Layer 4: SKILL.md 正文匹配 ---
+        matched_body_keywords = _collect_body_hits(entry, keywords)
+        score += min(len(matched_body_keywords), 3) * 3
+
+        # --- Layer 5: 引用资料匹配 ---
+        matched_reference_keywords = _collect_reference_hits(entry, keywords)
+        score += min(len(matched_reference_keywords), 4) * 4
 
         results.append({
             'entry': entry,
             'score': score,
             'matched_headers': matched_headers,
             'matched_nav': matched_nav,
+            'matched_body_keywords': matched_body_keywords,
+            'matched_reference_keywords': matched_reference_keywords,
             'keywords': keywords,
         })
 
@@ -551,6 +785,7 @@ def slice_skill_content(
     description = entry.get('description', '')
     matched_headers = match_result.get('matched_headers', [])
     matched_nav = match_result.get('matched_nav', [])
+    keywords = match_result.get('keywords', [])
 
     try:
         full_content = _cached_file_read(skill_md_path)
@@ -598,14 +833,15 @@ def slice_skill_content(
                         if h not in target_headers:
                             target_headers.append(h)
 
+    target_headers = sorted(
+        target_headers,
+        key=lambda header: (-_header_match_score(header, keywords), header.get('line', 0))
+    )
+
+    fallback_chunk = '\n'.join(lines[:min(20, total_lines)])[:remaining_budget]
+
     if not target_headers:
-        # 没有命中标题,读取前 N 行作为摘要 (但不立即返回,继续检查引用文件)
-        chunk_lines = lines[:min(20, total_lines)]
-        chunk = '\n'.join(chunk_lines)[:remaining_budget]
-        chunks = [chunk]
-        remaining_budget -= len(chunk) + 2
-        if remaining_budget < 0:
-            remaining_budget = 0
+        chunks = []
     else:
         # 按命中标题切片
         chunks = []
@@ -648,15 +884,25 @@ def slice_skill_content(
     # --- 关键词回退搜索:在引用文件中搜索包含上下文关键词的章节 ---
     # 当导航表未命中具体章节时(如用户问"反击"但导航表只有"战斗"),直接搜索引用文件
     # 优先于导航表切片,因为关键词匹配更精确
-    keywords = match_result.get('keywords', [])
-    if keywords and remaining_budget > 0 and entry.get('references'):
+    # 合并三组关键词而非 or 短路:
+    # matched_reference_keywords 可能只含 "trpg"、"狩魂者" 等宽泛词,
+    # 而 keywords 里有 "反击规则" 等长词,需要传入 _search_reference_for_keywords
+    # 才能从中提取 2 字子串 "反击" 去规则书里搜索
+    reference_keywords = _select_reference_keywords(
+        _dedupe_keep_order(
+            list(match_result.get('matched_reference_keywords') or [])
+            + list(match_result.get('matched_body_keywords') or [])
+            + list(keywords)
+        )
+    )
+    if reference_keywords and remaining_budget > 0 and entry.get('references'):
         # 传入技能描述,用于过滤出现在描述中的宽泛关键词(如"狩魂"、"魂者")
         skill_desc = entry.get('desc_text', '')
         for ref_path in entry.get('references', []):
             if remaining_budget <= 0:
                 break
             ref_full = os.path.join(entry['dir'], ref_path)
-            kw_chunk = _search_reference_for_keywords(ref_full, keywords, remaining_budget, skill_desc)
+            kw_chunk = _search_reference_for_keywords(ref_full, reference_keywords, remaining_budget, skill_desc)
             if kw_chunk:
                 chunks.append(kw_chunk)
                 remaining_budget -= len(kw_chunk) + 2
@@ -688,8 +934,10 @@ def slice_skill_content(
 
     if not chunks:
         # 没有切出任何内容,回退到前 20 行
-        chunk = '\n'.join(lines[:min(20, total_lines)])[:remaining_budget]
-        return header + '\n' + chunk
+        return header + '\n' + fallback_chunk
+
+    if not target_headers and remaining_budget > 200 and fallback_chunk:
+        chunks.append(fallback_chunk[:remaining_budget])
 
     return header + '\n' + '\n'.join(chunks)
 
