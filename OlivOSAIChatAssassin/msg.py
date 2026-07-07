@@ -5,6 +5,7 @@ import threading
 import re
 import os
 import hashlib
+from difflib import SequenceMatcher
 from datetime import datetime
 from collections import deque
 from typing import Optional, Callable, Tuple
@@ -1279,6 +1280,8 @@ def score_image_lookup(normalized_ref: str, image_ref: str, requested_ext: str, 
         score = max(score, 300)
     elif normalized_ref in normalized_file_name or normalized_file_name in normalized_ref:
         score = max(score, 180)
+    else:
+        score = max(score, score_fuzzy_image_text(normalized_ref, normalized_file_name, 180))
     for key, value_score in (
         ('content', 160),
         ('intent', 120),
@@ -1294,6 +1297,8 @@ def score_image_lookup(normalized_ref: str, image_ref: str, requested_ext: str, 
             score = max(score, value_score + 80)
         elif normalized_ref in normalized_value or normalized_value in normalized_ref:
             score = max(score, value_score)
+        else:
+            score = max(score, score_fuzzy_image_text(normalized_ref, normalized_value, value_score))
     file_stem = os.path.splitext(file_name)[0].lower()
     ref_stem = os.path.splitext(image_ref.strip())[0].lower()
     if ref_stem and file_stem == ref_stem:
@@ -1306,6 +1311,86 @@ def score_image_lookup(normalized_ref: str, image_ref: str, requested_ext: str, 
     elif file_ext == 'gif':
         score += 20
     return score
+
+
+def score_fuzzy_image_text(normalized_ref: str, normalized_value: str, max_score: int) -> int:
+    if not normalized_ref or not normalized_value:
+        return 0
+    min_len = min(len(normalized_ref), len(normalized_value))
+    max_len = max(len(normalized_ref), len(normalized_value))
+    if min_len < 2:
+        return 0
+    length_rate = min_len / max_len
+    if length_rate < get_image_fuzzy_length_rate_limit(min_len):
+        return 0
+    if min_len == 2 and max_len <= 3:
+        same_position_count = sum(
+            1
+            for ref_char, value_char in zip(normalized_ref, normalized_value)
+            if ref_char == value_char
+        )
+        if same_position_count >= 1:
+            return int(max_score * 0.75)
+    ratio = SequenceMatcher(None, normalized_ref, normalized_value).ratio()
+    long_text_score = score_long_fuzzy_image_text(normalized_ref, normalized_value, max_score)
+    if ratio < get_image_fuzzy_ratio_threshold(min_len):
+        return long_text_score
+    return max(int(max_score * ratio), long_text_score)
+
+
+def get_image_fuzzy_length_rate_limit(min_len: int) -> float:
+    if min_len >= 16:
+        return 0.25
+    if min_len >= 10:
+        return 0.32
+    if min_len >= 6:
+        return 0.40
+    return 0.45
+
+
+def get_image_fuzzy_ratio_threshold(min_len: int) -> float:
+    if min_len >= 24:
+        return 0.48
+    if min_len >= 16:
+        return 0.54
+    if min_len >= 10:
+        return 0.60
+    if min_len >= 6:
+        return 0.68
+    return 0.74
+
+
+def score_long_fuzzy_image_text(normalized_ref: str, normalized_value: str, max_score: int) -> int:
+    min_len = min(len(normalized_ref), len(normalized_value))
+    if min_len < 8:
+        return 0
+    ref_chunks = get_image_text_chunks(normalized_ref)
+    value_chunks = get_image_text_chunks(normalized_value)
+    if not ref_chunks or not value_chunks:
+        return 0
+    common_chunks = ref_chunks & value_chunks
+    if len(common_chunks) < 3:
+        return 0
+    chunk_cover = len(common_chunks) / min(len(ref_chunks), len(value_chunks))
+    ref_chunk_cover = len(common_chunks) / len(ref_chunks)
+    ref_chars = set(normalized_ref)
+    value_chars = set(normalized_value)
+    char_cover = len(ref_chars & value_chars) / min(len(ref_chars), len(value_chars))
+    if chunk_cover < 0.18 and char_cover < 0.50:
+        return 0
+    score_rate = 0.46 + chunk_cover * 0.35 + ref_chunk_cover * 0.12 + char_cover * 0.12
+    if min_len >= 16:
+        score_rate += 0.05
+    if min_len >= 24:
+        score_rate += 0.04
+    return int(max_score * min(score_rate, 0.95))
+
+
+def get_image_text_chunks(text: str) -> set[str]:
+    return {
+        text[index:index + 2]
+        for index in range(0, max(len(text) - 1, 0))
+    }
 
 
 def get_image_ref_ext(data: str) -> str:
