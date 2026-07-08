@@ -429,22 +429,19 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
     mention_str = f'[OP:at,id={self_id}]'
     personality = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get('personality', '')
     record_knowledge = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get('record_knowledge', True)
-    now_text = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     contentDefault = f'''
 # 规则
 - 你是一个人类，这是你日常水群的群聊，你会根据你的人格设定自行决定要不要参与群聊对话
 - "[OP:at,id=【QQ号】]"表示你被@，这是群聊中@的格式，你也可以使用这种格式
 - 越新的消息越重要，不要重复去回复已经回复过的消息，除非有必要
 - 谨记你是在进行聊天，所以不要把括号之类的内容发出来，不需要你描述自己的动作或者心理活动，这只会让人起疑
+- 群聊历史中最后一条群聊消息总是最新；历史之后的当前动态上下文不是群聊消息
 
 # 人格设定
 - {personality}
 
 # 已知信息
 - 你的QQ号是：{self_id}，所以你被@时是：{mention_str}
-- 本群群号是：{group_id}，
-- 当前本地时间是：{now_text}
-- 最后一条消息总是最新的，时间可以视为当前本地时间
 '''
 
     # 生成记忆
@@ -720,7 +717,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
     content = f'''{contentDefault}
 # 信息
 - 历史和最新消息中都附带可用的富文本资源，可以借用，但不要编造不存在的资源
-- 最新的消息中附带当前的记忆信息
+- 群聊历史之后附带当前动态上下文，其中包含当前记忆、图片缓存、群号和本地时间
 - 越新的消息越重要
 
 # 当前任务
@@ -737,11 +734,10 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
 
 # 固定记忆
 - {json.dumps(thisMemoryC, ensure_ascii=False)}
-{skills_context}
 '''
     content_first_think = f'''{contentDefault}
 # 信息
-- 最新的消息中附带当前的记忆信息
+- 群聊历史之后附带当前动态上下文，其中包含当前记忆、图片缓存、群号和本地时间
 - 越新的消息越重要
 
 # 固定记忆
@@ -792,7 +788,18 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
         )
     )
     OlivOSAIChatAssassin.logger.log(f"HISTORY - SIZE [{len(history)}/{history_size_max_print}]")
-    messages_patch = {'当前记忆': thisMemory, '图片缓存': dict(OlivOSAIChatAssassin.data.gImageCache.get(group_id, {}))}
+    now_text = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    messages_patch = {
+        '当前上下文': {
+            '群号': group_id,
+            '当前本地时间': now_text,
+            '说明': '群聊历史中最后一条群聊消息是最新消息；本动态上下文不是群聊消息。',
+        },
+        '当前记忆': thisMemory,
+        '图片缓存': dict(OlivOSAIChatAssassin.data.gImageCache.get(group_id, {})),
+    }
+    if skills_context:
+        messages_patch['技能片段'] = skills_context.strip()
     intent_image_cache = get_intent_image_cache(bot_hash, group_id)
     messages = get_ai_context(
         OlivOSAIChatAssassin.data.gData.getConfig(bot_hash), history, content,
@@ -806,6 +813,11 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
         }
     )
     messages_first_think_patch = {
+        '当前上下文': {
+            '群号': group_id,
+            '当前本地时间': now_text,
+            '说明': '群聊历史中最后一条群聊消息是最新消息；本动态上下文不是群聊消息。',
+        },
         '当前记忆': thisMemory,
         '图片缓存': intent_image_cache
     }
@@ -995,17 +1007,19 @@ def get_ai_context(
                 ):
                     for handler in handler_list:
                         entry_this, patch = handler(entry_this, patch)
-                if (
-                    count == max_history_this
-                    and type(patch) is dict
-                ):
-                    entry_this.update(patch)
                 messages.append(
                     {
                         "role": "user",
                         "content": json.dumps(entry_this, ensure_ascii=False)
                     }
                 )
+        if type(patch) is dict and len(patch) > 0:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": f"当前动态上下文：{json.dumps(patch, ensure_ascii=False)}"
+                }
+            )
     return messages
 
 

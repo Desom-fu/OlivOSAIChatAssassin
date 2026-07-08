@@ -164,18 +164,13 @@ def log_usage(usage_data: dict):
             and 'prompt_cache_miss_tokens' in usage_data
             and type(usage_data['prompt_cache_miss_tokens']) is int
         ):
-            cache_hit = (
-                (
-                    usage_data['prompt_cache_hit_tokens']
-                    / (
-                        usage_data['prompt_cache_hit_tokens'] + usage_data['prompt_cache_miss_tokens']
-                    )
-                )
-                * 100
-            )
+            cache_hit_tokens = usage_data['prompt_cache_hit_tokens']
+            cache_miss_tokens = usage_data['prompt_cache_miss_tokens']
+            cache_total_tokens = cache_hit_tokens + cache_miss_tokens
+            cache_hit = (cache_hit_tokens / cache_total_tokens * 100) if cache_total_tokens > 0 else 0
             OlivOSAIChatAssassin.logger.log(
                 "USAGE - CACHE - "
-                f"{cache_hit:.2f} %"
+                f"{cache_hit:.2f} % ({cache_hit_tokens}/{cache_miss_tokens})"
             )
 
 
