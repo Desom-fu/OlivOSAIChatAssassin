@@ -41,6 +41,13 @@ gStaticKnowledge = {}
 gSkillsDir = './plugin/data/OlivOSAIChatAssassin/skills'
 gSkillsExtraDirs = []
 gSkillsIndex: 'dict' = {}
+gSkillsQueryCacheSize = 512
+gSkillsQueryCacheTTL = 900
+gSkillsTranslationBackend = 'bing'
+gSkillsTranslationFromLanguage = 'auto'
+gSkillsTranslationToLanguage = 'zh'
+gSkillsTranslationTimeout = 5
+gSkillsTranslationCachePath = './plugin/data/OlivOSAIChatAssassin/skill_translation_cache.json'
 
 gImageDir = './plugin/data/OlivOSAIChatAssassin/Image'
 gImageCache: 'dict[str, deque]' = {}
@@ -92,7 +99,7 @@ configDefault = {
     'ocr_api': {
         'api_key': '',
         'api_base': 'https://api.siliconflow.cn/v1',
-        'model': 'Pro/moonshotai/Kimi-K2.5',
+        'model': 'Pro/moonshotai/Kimi-K2.6',
         'mode': 'base64',
         'enable': False,
         "queue_size": 8

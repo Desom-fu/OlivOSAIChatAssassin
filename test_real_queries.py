@@ -6,6 +6,10 @@ import json
 import time
 import importlib.util
 
+if __name__ != '__main__':
+    import unittest
+    raise unittest.SkipTest('legacy manual benchmark script')
+
 PLUGIN_DIR = os.path.join(os.path.dirname(__file__), "OlivOSAIChatAssassin")
 SKILLS_DIR = r"C:\Users\Administrator\.codex\skills"
 MEMORY_FILE = os.path.join(
@@ -14,7 +18,7 @@ MEMORY_FILE = os.path.join(
 )
 
 spec = importlib.util.spec_from_file_location(
-    "skillManager", os.path.join(PLUGIN_DIR, "skillManager.py")
+    "skillManagerV2", os.path.join(PLUGIN_DIR, "skillManagerV2.py")
 )
 skillManager = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(skillManager)
@@ -294,3 +298,4 @@ if __name__ == "__main__":
     print("=" * 70)
     print(f"  技能匹配: {passed} 通过, {failed} 失败")
     print("=" * 70)
+    sys.exit(0 if failed == 0 else 1)

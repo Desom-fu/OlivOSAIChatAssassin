@@ -15,6 +15,10 @@ test_skills.py - OlivOSAIChatAssassin Skills 动态检索系统测试脚本
 
 import os
 import sys
+
+if __name__ != '__main__':
+    import unittest
+    raise unittest.SkipTest('legacy manual V1 test script')
 import shutil
 import tempfile
 import json
@@ -136,7 +140,7 @@ sys.modules['OlivOSAIChatAssassin'] = mock_module
 skill_manager_path = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     'OlivOSAIChatAssassin',
-    'skillManager.py'
+    'skillManagerV2.py'
 )
 spec = importlib.util.spec_from_file_location('skillManager', skill_manager_path)
 skillManager = importlib.util.module_from_spec(spec)

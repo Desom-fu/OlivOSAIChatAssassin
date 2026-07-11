@@ -80,6 +80,23 @@
 - `slack_time` 和 `slack_cooldown_time` 为回复的宽松和冷却时间，可以优化对话节奏
 - `ocr_api` 用于配置图像识别， `ocr_api.enable` 为 `true` 时启用， `ocr_api.queue_size` 控制每个群聊最多保留多少图像
 
+### Codex Skills
+
+插件运行时默认递归读取 `./plugin/data/OlivOSAIChatAssassin/skills` 下的 `SKILL.md`。本地回归测试会显式使用 `~/.codex/skills`，该路径不会影响服务器运行配置。
+
+V3 启动时解析 Skill 名称、描述、可选的 `aliases`/`keywords`/`triggers`、Markdown 标题和直接引用资料，并预建 BM25 索引。命中结果会保留 Skill 名称、来源文件、章节标题和评分。
+
+技能路由使用当前 bot 的 `history_size` 作为上下文消息条数；例如 `history_size: 12` 时使用最近 12 条消息。最大读取 64 条，避免配置错误造成无界扫描。
+
+- `skills_enable`：是否启用技能检索，默认为 `true`
+- `skills_max_chars`：单次注入的最大字符数，默认为 `2000`
+- `skills_max_matches`：单次最多选择的技能数，默认为 `2`
+- `skills_match_rate`：V3 路由最低匹配阈值调节参数
+
+当前运行入口为 `skillManagerV3.py`。`skillManagerV2.py` 通过 `skillManagerV2` 名称保留，原 `skillManager.py` 通过 `skillManagerLegacy` 名称保留。
+
+插件依赖 `translators` 包并默认调用 Bing 翻译，但不会把第三方库源码复制进插件目录。通过 `pip install .` 安装项目时会自动安装该依赖；服务器已经安装时无需重复处理。中文查询不会调用翻译。翻译结果缓存在 `plugin/data/OlivOSAIChatAssassin/skill_translation_cache.json`，V3 还会在独立守护线程外施加强制超时，避免第三方请求长期阻塞消息线程。
+
 ### memory.json
 ```json
 {

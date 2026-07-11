@@ -10,6 +10,10 @@ test_real_skills.py - 使用真实技能测试匹配能力
 import os
 import sys
 
+if __name__ != '__main__':
+    import unittest
+    raise unittest.SkipTest('legacy manual regression script')
+
 # ============================================================
 # Mock OlivOSAIChatAssassin 模块结构
 # ============================================================
@@ -122,7 +126,7 @@ sys.modules['OlivOSAIChatAssassin'] = mock_module
 skill_manager_path = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     'OlivOSAIChatAssassin',
-    'skillManager.py'
+    'skillManagerV2.py'
 )
 spec = importlib.util.spec_from_file_location('skillManager', skill_manager_path)
 skillManager = importlib.util.module_from_spec(spec)

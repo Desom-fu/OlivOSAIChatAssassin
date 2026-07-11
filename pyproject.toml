@@ -22,6 +22,10 @@ classifiers = [
 dependencies = [
     "olivos",
     "requests",
+    "jieba>=0.42.1",
+    "rank-bm25>=0.2.2",
+    "PyYAML>=6.0",
+    "translators>=6.0.4",
 ]
 
 [project.urls]
