@@ -49,6 +49,8 @@
     "history_size": 8,
     "history_dynamic": false,
     "history_dynamic_size": 16,
+    "prompt_cache_optimized": true,
+    "prompt_cache_history_size": 32,
     "slack_time": 5,
     "slack_cooldown_time": 30,
     "reply_probability": 1,
@@ -77,6 +79,8 @@
 - `record_knowledge` 为 `true` 时主动记录知识
 - `history_dynamic` 控制动态上下文窗口，开启将可以有效利用稀疏注意力的缓存能力
 - `history_dynamic_size` 开启动态上下文之后最大的上下文条目数量
+- `prompt_cache_optimized` 默认开启 DeepSeek 前缀缓存优化。开启后历史不会每条消息都滚动，而是从 `history_size` 增长到 `prompt_cache_history_size` 后再批量换代；这会显著增加连续请求的相同前缀
+- `prompt_cache_history_size` 是缓存优化窗口上限，默认 `32`。数值越大，批量换代越少、缓存命中通常越高，但单次请求输入也会变长；关闭 `prompt_cache_optimized` 后仍按原有 `history_dynamic` 配置运行
 - `slack_time` 和 `slack_cooldown_time` 为回复的宽松和冷却时间，可以优化对话节奏
 - `ocr_api` 用于配置图像识别， `ocr_api.enable` 为 `true` 时启用， `ocr_api.queue_size` 控制每个群聊最多保留多少图像
 
@@ -92,6 +96,7 @@ V3 启动时解析 Skill 名称、描述、可选的 `aliases`/`keywords`/`trigg
 - `skills_max_chars`：单次注入的最大字符数，默认为 `2000`
 - `skills_max_matches`：单次最多选择的技能数，默认为 `2`
 - `skills_match_rate`：V3 路由最低匹配阈值调节参数
+- `knowledge_cache_max`：自动知识缓存最大条目数。`0` 表示无限；大于 `0` 时保留最近写入或更新的知识，并淘汰最旧条目。修改后重载插件也会清理已有缓存
 
 当前运行入口为 `skillManagerV3.py`。`skillManagerV2.py` 通过 `skillManagerV2` 名称保留，原 `skillManager.py` 通过 `skillManagerLegacy` 名称保留。
 

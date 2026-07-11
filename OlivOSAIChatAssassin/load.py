@@ -56,6 +56,53 @@ def write_memory(bot_hash: str):
         OlivOSAIChatAssassin.data.gData.save_bot_memory(bot_hash)
 
 
+def get_knowledge_cache_limit(config: dict) -> int:
+    """读取知识缓存上限；0 表示无限，非法值按无限处理。"""
+    try:
+        return max(0, int(config.get(
+            'knowledge_cache_max',
+            OlivOSAIChatAssassin.data.configDefault['knowledge_cache_max'],
+        )))
+    except (AttributeError, TypeError, ValueError):
+        return 0
+
+
+def trim_knowledge_cache(memory: dict, config: dict) -> list[str]:
+    """按字典写入顺序淘汰最旧知识，返回被移除的键。"""
+    limit = get_knowledge_cache_limit(config)
+    if limit == 0 or not isinstance(memory, dict):
+        return []
+    global_memory = memory.get('全局', {})
+    if not isinstance(global_memory, dict):
+        return []
+    knowledge_cache = global_memory.get('知识缓存', {})
+    if not isinstance(knowledge_cache, dict) or len(knowledge_cache) <= limit:
+        return []
+    removed_keys = list(knowledge_cache)[:len(knowledge_cache) - limit]
+    for key in removed_keys:
+        knowledge_cache.pop(key, None)
+    return removed_keys
+
+
+def update_knowledge_cache(memory: dict, updates: dict, config: dict) -> list[str]:
+    """写入知识并把更新项移到末尾，使上限优先保留最近写入的知识。"""
+    if not isinstance(memory, dict) or not isinstance(updates, dict):
+        return []
+    global_memory = memory.setdefault('全局', {})
+    if not isinstance(global_memory, dict):
+        return []
+    knowledge_cache = global_memory.setdefault('知识缓存', {})
+    if not isinstance(knowledge_cache, dict):
+        knowledge_cache = {}
+        global_memory['知识缓存'] = knowledge_cache
+    for key, value in updates.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        knowledge_cache.pop(key, None)
+        knowledge_cache[key] = value
+    return trim_knowledge_cache(memory, config)
+
+
 def load_staticKnowledge():
     OlivOSAIChatAssassin.data.gStaticKnowledge = {}
     try:
@@ -213,6 +260,16 @@ class DataManager:
         if merged_changed:
             flag_need_write = True
 
+        removed_knowledge = trim_knowledge_cache(
+            memory,
+            self.config.get(bot_hash, self.default_config),
+        )
+        if removed_knowledge:
+            flag_need_write = True
+            OlivOSAIChatAssassin.logger.log(
+                f'知识缓存已按上限清理: {len(removed_knowledge)} 条'
+            )
+
         if flag_need_write:
             target_path = specific_path
             with self._memory_lock:
@@ -333,13 +390,43 @@ class DataManager:
             self._memory_mtime[bot_hash] = os.path.getmtime(path)
 
 
+def get_history_limits(config: dict) -> tuple[int, int]:
+    """返回历史窗口下限和增长上限；增长窗口可保持 DeepSeek 请求前缀稳定。"""
+    keep_default = OlivOSAIChatAssassin.data.configDefault['history_size']
+    try:
+        keep = max(1, int(config.get('history_size', keep_default)))
+    except (TypeError, ValueError):
+        keep = keep_default
+
+    cache_optimized = config.get(
+        'prompt_cache_optimized',
+        OlivOSAIChatAssassin.data.configDefault['prompt_cache_optimized'],
+    ) is True
+    history_dynamic = config.get(
+        'history_dynamic',
+        OlivOSAIChatAssassin.data.configDefault['history_dynamic'],
+    ) is True
+    if cache_optimized:
+        max_grow_value = config.get(
+            'prompt_cache_history_size',
+            OlivOSAIChatAssassin.data.configDefault['prompt_cache_history_size'],
+        )
+    elif history_dynamic:
+        max_grow_value = config.get(
+            'history_dynamic_size',
+            OlivOSAIChatAssassin.data.configDefault['history_dynamic_size'],
+        )
+    else:
+        max_grow_value = keep
+    try:
+        max_grow = max(keep, int(max_grow_value))
+    except (TypeError, ValueError):
+        max_grow = keep
+    return keep, max_grow
+
+
 def _build_history_queue(config):
-    keep = config.get('history_size', OlivOSAIChatAssassin.data.configDefault['history_size'])
-    max_grow = (
-        config.get('history_dynamic_size', OlivOSAIChatAssassin.data.configDefault['history_dynamic_size'])
-        if config.get('history_dynamic', OlivOSAIChatAssassin.data.configDefault['history_dynamic']) is True
-        else keep
-    )
+    keep, max_grow = get_history_limits(config)
     return OlivOSAIChatAssassin.tools.DynamicQueue(keep=keep, max_grow=max_grow)
 
 

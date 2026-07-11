@@ -295,21 +295,12 @@ def unity_group_message_router(plugin_event: OlivOS.API.Event, Proc):
         return
     # 添加消息到历史
     if group_id not in OlivOSAIChatAssassin.data.gMessageHistory:
+        history_keep, history_max_grow = OlivOSAIChatAssassin.load.get_history_limits(
+            OlivOSAIChatAssassin.data.gData.getConfig(bot_hash)
+        )
         OlivOSAIChatAssassin.data.gMessageHistory[group_id] = OlivOSAIChatAssassin.tools.DynamicQueue(
-            keep=OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
-                'history_size', OlivOSAIChatAssassin.data.configDefault['history_size']
-            ),
-            max_grow=(
-                OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
-                    'history_dynamic_size', OlivOSAIChatAssassin.data.configDefault['history_dynamic_size'],
-                )
-                if OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
-                    'history_dynamic', OlivOSAIChatAssassin.data.configDefault['history_dynamic'],
-                ) is True else
-                OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
-                    'history_size', OlivOSAIChatAssassin.data.configDefault['history_size'],
-                )
-            )
+            keep=history_keep,
+            max_grow=history_max_grow,
         )
     message_id = plugin_event.data.message_id
     if -1 == message_id:
@@ -497,10 +488,15 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
             .get(group_id, OlivOSAIChatAssassin.data.gMemoryDefaultStr)
         )
         messages = get_ai_context(
-            OlivOSAIChatAssassin.data.gData.getConfig(bot_hash), history, content, flagMerge=True,
-            prefix='现在提炼如下对话中的重要知识点：',
-            patch=f'前情提要：{summary}'
+            OlivOSAIChatAssassin.data.gData.getConfig(bot_hash),
+            history,
+            content,
+            patch={'前情提要': summary},
         )
+        messages.append({
+            'role': 'user',
+            'content': '现在提炼以上对话中的重要知识点，只输出符合要求的JSON对象。',
+        })
         # 调用 API
         try:
             call_ai_res = OlivOSAIChatAssassin.webTools.call_ai(
@@ -511,8 +507,8 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                 response_format_override={"type": "json_object"}
             )
             call_ai_data = json.loads(call_ai_res)
-            knowledge_data: 'dict|None' = None
-            user_data: 'dict|None' = None
+            knowledge_data: dict = {}
+            user_data: dict = {}
             group_memory_data: 'str|None' = None
             with OlivOSAIChatAssassin.data.gMemoryLock:
                 if '全局' not in OlivOSAIChatAssassin.data.gData.getMemory(bot_hash):
@@ -522,15 +518,24 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                     and type(call_ai_data['k']) is dict
                 ):
                     knowledge_data = call_ai_data['k']
-                if '知识缓存' not in OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']:
-                    OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']['知识缓存'] = {}
+                valid_knowledge_data = {}
                 for k, v in knowledge_data.items():
                     if (
                         type(k) is str
                         and type(v) is str
                     ):
-                        OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']['知识缓存'][k] = v
+                        valid_knowledge_data[k] = v
                         OlivOSAIChatAssassin.logger.log(f'[更新知识] - {k}\n{v}')
+                removed_knowledge = OlivOSAIChatAssassin.load.update_knowledge_cache(
+                    OlivOSAIChatAssassin.data.gData.getMemory(bot_hash),
+                    valid_knowledge_data,
+                    OlivOSAIChatAssassin.data.gData.getConfig(bot_hash),
+                )
+                if removed_knowledge:
+                    OlivOSAIChatAssassin.logger.log(
+                        f'[知识缓存淘汰] - {len(removed_knowledge)} 条: '
+                        f'{", ".join(removed_knowledge)}'
+                    )
                 if (
                     'u' in call_ai_data
                     and type(call_ai_data['u']) is dict
@@ -776,16 +781,8 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
 - 只能输出 {{"d":"NEXT","i":"图片内容或意图关键词或空字符串"}} 或 {{"d":"SKIP","i":""}}
 '''
     # 格式化历史为OpenAI消息格式
-    history_size_max_print = (
-        OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
-            'history_dynamic_size', OlivOSAIChatAssassin.data.configDefault['history_dynamic_size'],
-        )
-        if OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
-            'history_dynamic', OlivOSAIChatAssassin.data.configDefault['history_dynamic'],
-        ) is True else
-        OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
-            'history_size', OlivOSAIChatAssassin.data.configDefault['history_size'],
-        )
+    _, history_size_max_print = OlivOSAIChatAssassin.load.get_history_limits(
+        OlivOSAIChatAssassin.data.gData.getConfig(bot_hash)
     )
     OlivOSAIChatAssassin.logger.log(f"HISTORY - SIZE [{len(history)}/{history_size_max_print}]")
     now_text = datetime.now().strftime('%Y-%m-%d %H:%M:%S')

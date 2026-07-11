@@ -86,6 +86,8 @@ configDefault = {
     'history_size': 8,
     'history_dynamic': False,
     'history_dynamic_size': 16,
+    'prompt_cache_optimized': True,
+    'prompt_cache_history_size': 32,
     'slack_time': 5,
     'slack_cooldown_time': 30,
     'reply_probability': 1,
