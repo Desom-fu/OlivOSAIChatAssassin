@@ -127,6 +127,9 @@ memory_<botHash>.json
 | `intent_api.model` | `Qwen/Qwen2.5-7B-Instruct` | 意图分类模型。 |
 | `intent_api.max_tokens` | `16` | 分类 JSON 最大输出 token；被截断时可提高到 32 或 64。 |
 | `intent_api.temperature` | `0.0` | 分类任务使用确定性输出。 |
+| `intent_api.timeout` | `45` | 首次意图判断请求超时秒数。超时、网络错误或解析失败时默认 `PASS`，继续调用正式主模型，避免门卫故障把整次回复掐掉。 |
+
+首次意图判断若超时、网络异常、API 报错或返回无法识别内容，会默认 `PASS` 并继续正式回复；只有明确返回 `SKIP` 才会跳过。
 
 只有同时满足以下条件，独立意图 API 才会工作：
 

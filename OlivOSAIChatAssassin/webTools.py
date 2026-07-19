@@ -57,7 +57,7 @@ def get_intent_ai_config(lConfig: dict) -> dict:
         res['api_base'] = api_base.rstrip('/')
     if type(model) is str and model:
         res['model'] = model
-    for key in ('max_tokens', 'temperature', 'thinking', 'reasoning_effort'):
+    for key in ('max_tokens', 'temperature', 'thinking', 'reasoning_effort', 'timeout'):
         if key in intent_api:
             res[key] = intent_api[key]
     return res
@@ -69,7 +69,8 @@ def call_ai(
     temperature_override: 'float|None' = None,
     flag_thinking_override: 'bool|None' = None,
     reasoning_effort_override: 'str|None' = None,
-    response_format_override: 'dict|None' = None
+    response_format_override: 'dict|None' = None,
+    timeout_override: 'float|int|None' = None
 ):
     # 调用 API
     res = None
@@ -110,9 +111,24 @@ def call_ai(
         payload.update({
             'response_format': response_format_override
         })
-    OlivOSAIChatAssassin.logger.log(f"CALL AI - START [{model} @ {api_base}, max_tokens={max_tokens}]")
+    timeout = 30
+    if timeout_override is not None:
+        try:
+            timeout = float(timeout_override)
+        except Exception:
+            timeout = 30
+    elif 'timeout' in lConfig:
+        try:
+            timeout = float(lConfig.get('timeout', 30))
+        except Exception:
+            timeout = 30
+    if timeout <= 0:
+        timeout = 30
+    OlivOSAIChatAssassin.logger.log(
+        f"CALL AI - START [{model} @ {api_base}, max_tokens={max_tokens}, timeout={timeout}]"
+    )
     start = time.perf_counter()
-    response = requests.post(url, headers=headers, json=payload, timeout=30)
+    response = requests.post(url, headers=headers, json=payload, timeout=timeout)
     end = time.perf_counter()
     OlivOSAIChatAssassin.logger.log(f"CALL AI - DONE {(end - start):.2f} s")
     if response.status_code == 200:

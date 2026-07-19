@@ -72,7 +72,8 @@ configDefault = {
         'api_base': 'https://api.siliconflow.cn/v1',
         'model': 'Qwen/Qwen2.5-7B-Instruct',
         'max_tokens': 16,
-        'temperature': 0.0
+        'temperature': 0.0,
+        'timeout': 45
     },
     'personality': '你是一个伪装成人类的自豪的新锐AI，你择机加入聊天，避免过多尬聊。别让他们发现你的真实身份！！！',
     'record_knowledge': True,

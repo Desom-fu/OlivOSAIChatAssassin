@@ -861,37 +861,57 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
             ):
                 first_thinking_done = True
                 flag_need_think = False
-                intent_config = OlivOSAIChatAssassin.webTools.get_intent_ai_config(
-                    OlivOSAIChatAssassin.data.gData.getConfig(bot_hash)
-                )
-                first_thinking_res = OlivOSAIChatAssassin.webTools.call_ai(
-                    intent_config, messages_first_think,
-                    flag_thinking_override=False,
-                    response_format_override={"type": "json_object"}
-                )
-                OlivOSAIChatAssassin.logger.log(f'FIRST THINK RES - {first_thinking_res}')
-                first_thinking_str = ''
                 try:
-                    first_thinking_data = json.loads(first_thinking_res)
-                    if type(first_thinking_data) is dict:
-                        first_thinking_str = str(first_thinking_data.get('d', '')).upper()
-                        first_thinking_image_ref = str(first_thinking_data.get('i', '')).strip()
-                except Exception:
-                    first_thinking_str = str(first_thinking_res).strip().upper()
-                if first_thinking_str.startswith('NEXT'):
+                    bot_config = OlivOSAIChatAssassin.data.gData.getConfig(bot_hash)
+                    intent_config = OlivOSAIChatAssassin.webTools.get_intent_ai_config(bot_config)
+                    intent_api = bot_config.get(
+                        'intent_api',
+                        OlivOSAIChatAssassin.data.configDefault.get('intent_api', {})
+                    )
+                    first_thinking_timeout = OlivOSAIChatAssassin.data.configDefault.get(
+                        'intent_api', {}
+                    ).get('timeout', 45)
+                    if type(intent_api) is dict and 'timeout' in intent_api:
+                        try:
+                            first_thinking_timeout = float(intent_api.get('timeout', first_thinking_timeout))
+                        except Exception:
+                            pass
+                    first_thinking_res = OlivOSAIChatAssassin.webTools.call_ai(
+                        intent_config, messages_first_think,
+                        flag_thinking_override=False,
+                        response_format_override={"type": "json_object"},
+                        timeout_override=first_thinking_timeout
+                    )
+                    OlivOSAIChatAssassin.logger.log(f'FIRST THINK RES - {first_thinking_res}')
+                    first_thinking_str = ''
+                    try:
+                        first_thinking_data = json.loads(first_thinking_res)
+                        if type(first_thinking_data) is dict:
+                            first_thinking_str = str(first_thinking_data.get('d', '')).upper()
+                            first_thinking_image_ref = str(first_thinking_data.get('i', '')).strip()
+                    except Exception:
+                        first_thinking_str = str(first_thinking_res).strip().upper()
+                    if first_thinking_str.startswith('NEXT'):
+                        flag_need_think = True
+                    elif first_thinking_str.startswith('SKIP'):
+                        flag_need_think = False
+                        reply_list = []
+                    else:
+                        OlivOSAIChatAssassin.logger.warn(f'FIRST THINK DATA ERR: {first_thinking_res}')
+                        flag_need_think = True
+                    first_thinking_pass = flag_need_think
+                    if flag_need_think:
+                        OlivOSAIChatAssassin.logger.log(f"FIRST THINK - PASS - {first_thinking_res}")
+                    else:
+                        OlivOSAIChatAssassin.logger.log(f"FIRST THINK - SKIP - {first_thinking_res}")
+                        reply_list = []
+                except Exception as e:
+                    # Timeout/network/other errors default to PASS so gatekeeper failure won't drop replies.
+                    OlivOSAIChatAssassin.logger.warn(f'FIRST THINK FAIL (default PASS): {e}')
                     flag_need_think = True
-                elif first_thinking_str.startswith('SKIP'):
-                    flag_need_think = False
-                    reply_list = []
-                else:
-                    OlivOSAIChatAssassin.logger.warn(f'FIRST THINK DATA ERR: {first_thinking_res}')
-                    flag_need_think = True
-                first_thinking_pass = flag_need_think
-                if flag_need_think:
-                    OlivOSAIChatAssassin.logger.log(f"FIRST THINK - PASS - {first_thinking_res}")
-                else:
-                    OlivOSAIChatAssassin.logger.log(f"FIRST THINK - SKIP - {first_thinking_res}")
-                    reply_list = []
+                    first_thinking_pass = True
+                    first_thinking_image_ref = ''
+                    reply_list = None
             if flag_need_think:
                 if first_thinking_image_ref and first_thinking_image_added is False:
                     first_thinking_image_added = True
