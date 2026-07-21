@@ -300,8 +300,17 @@ def download_image_to_local(url: str, save_dir: str, filename: str) -> str | Non
         if not content_type.startswith('image/'):
             return None
 
-        # 保证文件名安全（移除非法字符）
-        file_path = os.path.join(save_dir, filename)
+        # 保证文件名安全：移除路径分隔符和 .. 组件，只保留基础文件名
+        safe_filename = os.path.basename(filename.replace('\\', '/'))
+        safe_filename = safe_filename.lstrip('.')
+        if not safe_filename:
+            OlivOSAIChatAssassin.logger.warn("OCR IMAGE DOWNLOAD FAILED - UNSAFE FILENAME")
+            return None
+        file_path = os.path.join(save_dir, safe_filename)
+        # 二次校验：确保最终路径在 save_dir 内
+        if not os.path.abspath(file_path).startswith(os.path.abspath(save_dir)):
+            OlivOSAIChatAssassin.logger.warn("OCR IMAGE DOWNLOAD FAILED - PATH ESCAPE")
+            return None
 
         # 写入文件
         with open(file_path, 'wb') as f:

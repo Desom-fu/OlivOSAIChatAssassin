@@ -253,7 +253,11 @@ class DynamicQueue:
         # 如果当前长度已经达到 max_grow，下一次追加时先修剪
         if len(self.queue) == self.max_grow:
             # 保留最后 keep-1 个元素（因为接下来还要追加一个新元素）
-            self.queue = self.queue[-(self.keep - 1):]
+            keep_count = max(0, self.keep - 1)
+            if keep_count > 0:
+                self.queue = self.queue[-keep_count:]
+            else:
+                self.queue = []
         # 追加新元素
         self.queue.append(item)
 

@@ -255,7 +255,7 @@ def explain_skill_selection(history: list[dict[str, Any]], bot_hash: str) -> lis
     window = _history_window(history, bot_hash)
     latest_text = next((str(item.get('message', '')) for item in reversed(window) if item.get('message')), query_text)
     query_tokens = _tokens(query_text)
-    cache_key = '\x1f'.join(query_tokens)
+    cache_key = f'{bot_hash}\x1f' + '\x1f'.join(query_tokens)
     cached = _query_cache.get(cache_key)
     if cached and time.time() - cached[0] <= OlivOSAIChatAssassin.data.gSkillsQueryCacheTTL:
         _query_cache.move_to_end(cache_key)
@@ -286,6 +286,9 @@ def explain_skill_selection(history: list[dict[str, Any]], bot_hash: str) -> lis
     if not ranked:
         result = []
         _query_cache[cache_key] = (time.time(), result)
+        _query_cache.move_to_end(cache_key)
+        while len(_query_cache) > OlivOSAIChatAssassin.data.gSkillsQueryCacheSize:
+            _query_cache.popitem(last=False)
         return result
     limit = max(1, int(config.get('skills_max_matches', 2)))
     result = ranked[:limit]

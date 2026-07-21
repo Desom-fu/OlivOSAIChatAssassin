@@ -101,8 +101,10 @@ def flatten_message_content(content) -> str:
                 return f'[回复:{data.get("id")}]'
             return '[回复]'
         if segment_type == 'at':
-            if isinstance(data, dict) and data.get('qq') is not None:
-                return f'[OP:at,id={data.get("qq")}]'
+            if isinstance(data, dict):
+                at_id = data.get('qq') or data.get('id')
+                if at_id is not None:
+                    return f'[OP:at,id={at_id}]'
             return '[艾特]'
         if segment_type == 'record':
             return '[语音]'
@@ -555,7 +557,8 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
                     and type(call_ai_data['g']) is str
                 ):
                     group_memory_data = call_ai_data['g']
-                OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)[group_id] = group_memory_data
+                if group_memory_data is not None:
+                    OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)[group_id] = group_memory_data
                 OlivOSAIChatAssassin.logger.log(
                     f'[本群记忆]\n{OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)[group_id]}'
                 )
@@ -708,6 +711,39 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
             f'HIT - {time.perf_counter() - total_start:.2f}'
             f'/{OlivOSAIChatAssassin.data.gGroupLock[group_id].getRemaining():.2f} s - {message}'
         )
+    # --- Agent 模式分支 ---
+    if OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
+        'agent_enable', OlivOSAIChatAssassin.data.configDefault['agent_enable']
+    ):
+        agent_reply_list = OlivOSAIChatAssassin.agent.agent_reply(
+            plugin_event, group_id, history,
+            OlivOSAIChatAssassin.data.gData.getConfig(bot_hash)
+        )
+        if agent_reply_list is None:
+            OlivOSAIChatAssassin.logger.log('AGENT - NONE (fallback to legacy)')
+        elif len(agent_reply_list) <= 0:
+            OlivOSAIChatAssassin.logger.log('AGENT - SKIP')
+            return
+        else:
+            OlivOSAIChatAssassin.tools.set_think(bot_hash, group_id)
+            agent_reply_list = reply_wash(agent_reply_list, bot_hash=bot_hash)
+            OlivOSAIChatAssassin.logger.log(f'AGENT REPLY - {agent_reply_list}')
+            add_message_to_history(
+                group_id, ''.join(reply_history_wash(agent_reply_list)),
+                None, None, bot_hash=bot_hash
+            )
+            t_set_memory = threading.Thread(
+                target=set_memory,
+                args=(thisMemory, )
+            )
+            t_set_memory.start()
+            OlivOSAIChatAssassin.tools.sleep(1 + (random.random() * 2 - 1) * 0.95)
+            reply(
+                plugin_event, reply_trans(agent_reply_list, bot_hash=bot_hash),
+                total_time_past=time.perf_counter() - total_start
+            )
+            t_set_memory.join()
+            return
     # --- Skills 动态注入 ---
     skills_context = ''
     if OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get(
@@ -1060,22 +1096,32 @@ def img_handler(entry_data: dict, patch_data: dict[str, dict]) -> Tuple[dict, di
 
 def get_json_message(data_str: str):
     res_list = []
+    data_dict = None
+    # 第一步：尝试整体解析（模型输出纯 JSON 的正常情况）
     try:
         data_dict = json.loads(data_str)
-        if (
-            type(data_dict) is dict
-            and 'r' in data_dict
-            and type(data_dict['r']) is list
-        ):
-            for i in data_dict['r']:
-                res_list.append(i)
-            OlivOSAIChatAssassin.logger.log('DATA TYPE - JSON')
-        else:
-            res_list = None
-            OlivOSAIChatAssassin.logger.warn(f'DATA TYPE ERR: {data_str}')
     except Exception:
+        pass
+    # 第二步：整体解析失败，从混合文本中提取最后一个 {"r":...} 对象
+    if data_dict is None:
+        matches = re.findall(r'\{[^{}]*"r"\s*:\s*\[[^\]]*\][^{}]*\}', data_str)
+        if matches:
+            try:
+                data_dict = json.loads(matches[-1])
+            except Exception:
+                pass
+    # 校验结构
+    if (
+        type(data_dict) is dict
+        and 'r' in data_dict
+        and type(data_dict['r']) is list
+    ):
+        for i in data_dict['r']:
+            res_list.append(i)
+        OlivOSAIChatAssassin.logger.log('DATA TYPE - JSON')
+    else:
         res_list = None
-        OlivOSAIChatAssassin.logger.warn(f'DATA ERR: {data_str}')
+        OlivOSAIChatAssassin.logger.warn(f'DATA ERR: {data_str[:200]}')
     return res_list
 
 

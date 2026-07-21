@@ -8,3 +8,4 @@ from . import msg
 from . import skillManager as skillManagerLegacy
 from . import skillManagerV2 as skillManagerV2
 from . import skillManagerV3 as skillManager
+from . import agent

@@ -26,7 +26,12 @@ dependencies = [
     "rank-bm25>=0.2.2",
     "PyYAML>=6.0",
     "translators>=6.0.4",
+    "openai>=1.0",
+    "ddgs>=7.0",
 ]
+
+[tool.setuptools.packages.find]
+include = ["OlivOSAIChatAssassin*"]
 
 [project.urls]
 Repository = "https://github.com/lunzhiPenxil/OlivOSAIChatAssassin"

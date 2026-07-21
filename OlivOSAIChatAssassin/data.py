@@ -111,5 +111,18 @@ configDefault = {
     'skills_max_chars': 2000,
     'skills_max_matches': 2,
     'skills_match_rate': 0.12,
-    'knowledge_cache_max': 0
+    'knowledge_cache_max': 0,
+    'agent_enable': False,
+    'agent_max_turns': 5,
+    'agent_tools': [
+        'knowledge', 'skills', 'profile', 'memory',
+        'images', 'group_info', 'web_search', 'web_fetch'
+    ],
+    'web_search': {
+        'enable': False,
+        'backend': 'duckduckgo',
+        'api_key': '',
+        'api_base': '',
+        'max_results': 3
+    }
 }
