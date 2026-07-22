@@ -217,6 +217,10 @@ def call_ai_ocr(
                 "role": "user",
                 "content": [
                     {
+                        "type": "text",
+                        "text": "请识别这张图片，并严格按照系统要求输出 JSON。"
+                    },
+                    {
                         "type": "image_url",
                         "image_url": {
                             "url": image_url

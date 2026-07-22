@@ -18,6 +18,9 @@ FORWARD_PATTERN = re.compile(r'\[OP:forward,id=([^\]]+)\]')
 MFACE_PATTERN = re.compile(r'\[(?:CQ|OP):mface,[^\]]*(?:\[[^\]]*\])*[^\]]*\]')
 OP_IMAGE_PATTERN = re.compile(r'\[OP:image,[^\]]+\]')
 IMAGE_CODE_PATTERN = re.compile(r'\[图片：[^\]]*\]')
+VISION_DENIAL_PATTERN = re.compile(
+    r'(?:还没升级识图功能|尚未升级识图功能|暂时看不到(?:图里|图片|图像)?的?(?:具体)?内容|看不到图|无法识别图片|不能识别图片|没有识图功能|看不见这张图)'
+)
 
 
 def extract_tag_param(tag: str, key: str) -> 'str|None':
@@ -430,6 +433,13 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
 - 谨记你是在进行聊天，所以不要把括号之类的内容发出来，不需要你描述自己的动作或者心理活动，这只会让人起疑
 - 群聊历史中最后一条群聊消息总是最新；历史之后的当前动态上下文不是群聊消息
 
+# 图片理解
+- 消息中的“[图片：内容；意图；类型]”是视觉识别模型已经分析原图后生成的事实摘要，不是用户臆测或占位符
+- 只要图片摘要中的内容不是“未识别成功”，就视为你已经看到了图片；可以直接依据摘要回答、描述、比较或做选择
+- 禁止在已有有效图片摘要时说“看不到图片”“不会识图”“还没升级识图”等自相矛盾的话
+- 只有摘要明确写着“未识别成功”时，才说明暂时无法识别，并请用户用文字补充
+- 不要向群友暴露文件路径、Base64、OCR、视觉模型等实现细节，除非用户明确询问
+
 # 人格设定
 - {personality}
 
@@ -727,6 +737,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
         else:
             OlivOSAIChatAssassin.tools.set_think(bot_hash, group_id)
             agent_reply_list = reply_wash(agent_reply_list, bot_hash=bot_hash)
+            agent_reply_list = repair_vision_denial(agent_reply_list, history)
             OlivOSAIChatAssassin.logger.log(f'AGENT REPLY - {agent_reply_list}')
             add_message_to_history(
                 group_id, ''.join(reply_history_wash(agent_reply_list)),
@@ -979,6 +990,7 @@ def reply_to_group(plugin_event: OlivOS.API.Event, group_id: str, message: str):
         else:
             OlivOSAIChatAssassin.tools.set_think(bot_hash, group_id)
             reply_list = reply_wash(reply_list, bot_hash=bot_hash)
+            reply_list = repair_vision_denial(reply_list, history)
             OlivOSAIChatAssassin.logger.log(f'REPLY - {reply_list}')
             add_message_to_history(group_id, ''.join(reply_history_wash(reply_list)), None, None, bot_hash=bot_hash)
             t_set_memory = threading.Thread(
@@ -1092,6 +1104,46 @@ def img_handler(entry_data: dict, patch_data: dict[str, dict]) -> Tuple[dict, di
                 entry_res['当前图片缓存'][i] = patch_data['图片缓存'][i]
                 patch_res['图片缓存'].pop(i)
     return entry_res, patch_res
+
+
+def extract_vision_facts(message: str) -> list[str]:
+    """提取已由视觉模型成功识别的图片摘要，供回复纠偏使用。"""
+    if not isinstance(message, str):
+        return []
+    facts = []
+    for match in IMAGE_CODE_PATTERN.finditer(message):
+        text = match.group(0)
+        content_match = re.search(r'\[图片：([^；\]]+)', text)
+        if not content_match:
+            continue
+        content = content_match.group(1).strip()
+        if content and '未识别成功' not in content and content not in facts:
+            facts.append(content)
+    return facts
+
+
+def repair_vision_denial(reply_list: list, history: list[dict]) -> list:
+    """模型误用“看不到图片”话术时，用已确认的视觉摘要纠正回复。"""
+    if not isinstance(reply_list, list) or not isinstance(history, list):
+        return reply_list
+    latest_entry = history[-1] if history else {}
+    facts = extract_vision_facts(
+        latest_entry.get('message', '') if isinstance(latest_entry, dict) else ''
+    )
+    if not facts:
+        return reply_list
+    prefix = f'我看到了：{facts[-1]}。'
+    repaired = []
+    changed = False
+    for item in reply_list:
+        if not isinstance(item, str) or not VISION_DENIAL_PATTERN.search(item):
+            repaired.append(item)
+            continue
+        repaired.append(prefix)
+        changed = True
+    if changed:
+        OlivOSAIChatAssassin.logger.warn('VISION REPAIR - removed misleading image denial')
+    return repaired
 
 
 def get_json_message(data_str: str):
@@ -1641,11 +1693,13 @@ def msg_trans(msg: str, group_id: str, *, plugin_event: 'OlivOS.API.Event|None' 
 # 当前任务
 ## 识别图片并分析相关信息，以Json格式输出
 - 用户正在群聊中聊天，请识别图片并分析相关信息
-- 尽量精确的描述这个图片的内容，32字以内，单行内，输出到 "content" 键的值中
-- 如果有角色，识别的内容也应该尽量识别角色
-- 为用户分析这张图片的意图，32字以内，单行内，输出到 "intent" 键的值中
-- 分析这个图片的类型，例如表情包、梗图、照片、普通图片，输出到 "type" 键的值中
-- 以JSON格式输出
+- 在不编造的前提下，尽量完整描述图片内容，160字以内，单行输出到 "content" 键
+- 优先保留人物、物体、动作、环境、可见文字、编号、选项及它们的对应关系
+- 如果有角色，尽量识别角色名称；无法确定时描述外观，不要猜测具体身份
+- content 可以写完整细节，不要为了短标签主动删掉选项或图片文字；短标签由程序自动截断
+- 分析图片可能表达的意图，32字以内，单行输出到 "intent" 键
+- 判断图片类型，32字以内，优先从“表情包、梗图、截图、照片、插画、普通图片”中选择，输出到 "type" 键
+- 只输出严格JSON对象，键只能是 "content"、"intent"、"type"，不要输出Markdown或解释
 # 参考输出，以严格的Json格式输出
 {json.dumps(examples_reply, ensure_ascii=False)}
 '''
@@ -1657,12 +1711,24 @@ def msg_trans(msg: str, group_id: str, *, plugin_event: 'OlivOS.API.Event|None' 
                 )
                 if isinstance(ocr_res_data, str):
                     ocr_res = json.loads(ocr_res_data)
-                    if isinstance(ocr_res, dict) and all(isinstance(ocr_res.get(key), str) for key in examples_reply):
+                    valid_ocr = isinstance(ocr_res, dict) and all(
+                        isinstance(ocr_res.get(key), str) and ocr_res.get(key).strip()
+                        for key in examples_reply
+                    )
+                    if valid_ocr:
+                        ocr_res = {
+                            'content': ocr_res['content'].strip()[:160],
+                            'intent': ocr_res['intent'].strip()[:32],
+                            'type': ocr_res['type'].strip()[:32],
+                        }
+                        res_data = ocr_res
                         OlivOSAIChatAssassin.data.gData.getMemory(bot_hash).setdefault('全局', {})
                         OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局'].setdefault('图片缓存', {})
                         OlivOSAIChatAssassin.data.gData.getMemory(bot_hash)['全局']['图片缓存'][file_name] = ocr_res
-                        OlivOSAIChatAssassin.load.write_memory(bot_hash=bot_hash)
-                        res_data = ocr_res
+                        try:
+                            OlivOSAIChatAssassin.load.write_memory(bot_hash=bot_hash)
+                        except Exception as e:
+                            OlivOSAIChatAssassin.logger.warn(f'OCR IMAGE CACHE SAVE ERR: {e}')
             except Exception as e:
                 OlivOSAIChatAssassin.logger.warn(f'CALL AI OCR - ERR: {e}')
         if res_data is None:

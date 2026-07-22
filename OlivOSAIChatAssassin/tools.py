@@ -294,10 +294,14 @@ def imgcode_format(data: Optional[dict] = None) -> str:
         and 'intent' in data
         and 'type' in data
     ):
+        # 图片缓存保留完整视觉描述；写入聊天历史的短标签控制在 32 字以内。
+        content_text = str(data.get('content', '未识别成功')).strip()[:32]
+        intent_text = str(data.get('intent', '不明')).strip()[:32]
+        type_text = str(data.get('type', '不明')).strip()[:32]
         res = (
-            f"[图片：{data.get('content', '未识别成功')}"
-            f"；意图：{data.get('intent', '不明')}"
-            f"；类型：{data.get('type', '不明')}]"
+            f'[图片：{content_text}'
+            f'；意图：{intent_text}'
+            f'；类型：{type_text}]'
         )
     return res
 
