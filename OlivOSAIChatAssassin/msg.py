@@ -310,8 +310,10 @@ def unity_group_message_router(plugin_event: OlivOS.API.Event, Proc):
     message_id = plugin_event.data.message_id
     if -1 == message_id:
         message_id = None
+    # 新版 OlivOS 已将 qqGuildv2 的 author.username 写入统一的 nickname 字段。
+    nickname = plugin_event.data.sender.get('nickname') or '用户'
     add_message_to_history(
-        group_id, message, plugin_event.data.user_id, plugin_event.data.sender.get('nickname', '用户'),
+        group_id, message, plugin_event.data.user_id, nickname,
         message_id=message_id,
         bot_hash=bot_hash
     )
@@ -385,7 +387,10 @@ def add_message_to_history(
 def should_reply(group_id, message, plugin_event, bot_hash: str):
     if not OlivOSAIChatAssassin.data.gData.getConfig(bot_hash):
         return False
-    # 检查是否被@
+    # 检查是否被@（仅 onebot 等非官方协议有效）
+    # 官方 QQ 群机器人(qqGuildv2)即便开启全量消息，正文也不含 [OP:at] 标签、
+    # 且 self_id 为 AppID 而非 openid，无法可靠识别 @；官方端“无视 at”，
+    # 触发完全交给下方关键词(reply_keywords)与随机概率(reply_probability)。
     self_id = plugin_event.base_info['self_id']
     mention_str = f'[OP:at,id={self_id}]'
     if OlivOSAIChatAssassin.data.gData.getConfig(bot_hash).get('mention_reply', True) and mention_str in message:
@@ -1146,6 +1151,41 @@ def repair_vision_denial(reply_list: list, history: list[dict]) -> list:
     return repaired
 
 
+def _extract_r_tolerant(data_str: str):
+    """宽容提取 {"r":[...]} 中的 r 列表。
+    处理内部未转义引号、嵌套括号等 json.loads 无法解析的情况。
+    返回 list（可能为空）或 None（未找到有效结构）。"""
+    # 定位最后一个 "r" 键后的数组起始
+    matches = list(re.finditer(r'"r"\s*:\s*\[', data_str))
+    if not matches:
+        return None
+    arr_start = matches[-1].end()
+    # 从末尾向前找最近的 ']' 作为数组结束（容忍文本内出现的 ]）
+    arr_end = data_str.rfind(']', arr_start)
+    if arr_end < arr_start:
+        return None
+    inner = data_str[arr_start:arr_end].strip()
+    if not inner:
+        return []  # {"r":[]} 空列表，不回复
+    # 去首尾引号后按 "," 分割元素（容忍元素值内部的未转义引号）
+    if inner.startswith('"'):
+        inner = inner[1:]
+    if inner.endswith('"'):
+        inner = inner[:-1]
+    if not inner:
+        return ['']
+    parts = inner.split('","')
+    result = []
+    for p in parts:
+        p = p.strip()
+        if p.startswith('"'):
+            p = p[1:]
+        if p.endswith('"'):
+            p = p[:-1]
+        result.append(p)
+    return result
+
+
 def get_json_message(data_str: str):
     res_list = []
     data_dict = None
@@ -1162,6 +1202,12 @@ def get_json_message(data_str: str):
                 data_dict = json.loads(matches[-1])
             except Exception:
                 pass
+    # 第三步：宽容提取——处理内部未转义引号等 json.loads 无法解析的情况
+    if data_dict is None:
+        tolerant = _extract_r_tolerant(data_str)
+        if tolerant is not None:
+            OlivOSAIChatAssassin.logger.log('DATA TYPE - JSON (tolerant)')
+            return tolerant
     # 校验结构
     if (
         type(data_dict) is dict
@@ -1178,19 +1224,35 @@ def get_json_message(data_str: str):
 
 
 def send_message_force(bot_hash, send_type, target_id, message):
+    """无事件上下文时的主动发送（如定时器/主动触发的消息）。
+
+    注意：原生 fake_sdk_event 的 platform 为 fake 且 data 不含 extend，
+    框架 send() 不会路由到任何适配器，等于静默失效。
+    这里显式构造 qqGuildv2_link 平台且 extend['flag_from_qq']=True 的伪事件，
+    让官方 QQ 群机器人走 send_qq_msg 的主动群发分支。
+    """
     Proc = OlivOSAIChatAssassin.data.gProc
     if (
         Proc is not None
         and bot_hash in Proc.Proc_data['bot_info_dict']
     ):
         pluginName = OlivOSAIChatAssassin.data.gPluginName
-        plugin_event = OlivOS.API.Event(
-            OlivOS.contentAPI.fake_sdk_event(
-                bot_info=Proc.Proc_data['bot_info_dict'][bot_hash],
-                fakename=pluginName
-            ),
-            Proc.log
+        bot_info = Proc.Proc_data['bot_info_dict'][bot_hash]
+        fake_sdk = OlivOS.contentAPI.fake_sdk_event(
+            bot_info=bot_info,
+            fakename=pluginName,
+            platform={'sdk': 'qqGuildv2_link', 'platform': 'qq', 'model': 'default'}
         )
+        # 伪事件 data 必须是带 extend 属性的对象，否则框架路由访问 self.data.extend 会报错。
+        fake_sdk.data = type('FakeData', (), {
+            'type': 'fake_event',
+            'group_id': str(target_id),
+            'user_id': None,
+            'host_id': None,
+            'message_id': -1,
+            'extend': {'flag_from_qq': True, 'flag_from_direct': False, 'reply_msg_id': None}
+        })()
+        plugin_event = OlivOS.API.Event(fake_sdk, Proc.log)
         plugin_event.send(send_type, target_id, message)
 
 
@@ -1212,7 +1274,11 @@ def reply(plugin_event, msg: list, total_time_past: float = 0.0):
             if sleep_time > 30:
                 sleep_time /= 2
             OlivOSAIChatAssassin.tools.sleep(sleep_time)
-            plugin_event.reply(i)
+            # 主动发送以兼容官方 QQ 群机器人(qqGuildv2)：
+            # 框架在 extend['flag_from_qq']=True 且无 reply_msg_id 时走 send_qq_msg 主动群发分支，
+            # 同时绕开被动回复单条 msg_id 上限 5 条的限制。
+            # data.group_id 在官方 SDK 下即 group_openid，在 onebot 下为数字群号，均可直接用于 send。
+            plugin_event.send('group', str(plugin_event.data.group_id), i)
 
 
 def reply_wash(msg: list, bot_hash: str):

@@ -552,6 +552,14 @@ _SKIP_KEYWORDS = (
 def _fallback_parse_intent(content: str) -> list:
     """当 LLM 输出非标准 JSON 时，判断是"不回复"还是实际回复内容。
     检测文本首尾 15 字符是否以跳过关键词开头/结尾，中间不管，避免误判。"""
+    # 内容含 "r":[ 结构 → 模型试图输出 JSON 但格式损坏，绝不发送原文
+    if re.search(r'"r"\s*:\s*\[', content):
+        tolerant = OlivOSAIChatAssassin.msg._extract_r_tolerant(content)
+        if tolerant is not None:
+            OlivOSAIChatAssassin.logger.warn('AGENT - FALLBACK tolerant extraction OK')
+            return tolerant
+        OlivOSAIChatAssassin.logger.warn('AGENT - FALLBACK JSON detected but unextractable, skip')
+        return []
     head = content[:15]
     tail = content[-15:] if len(content) > 15 else content
     for kw in _SKIP_KEYWORDS:
